@@ -65,6 +65,61 @@ final class WebexTransportTests: XCTestCase {
         XCTAssertFalse(request.url?.absoluteString.contains("user+webex") == true)
     }
 
+    func testRawPathContainingLiteralPercentIsEncodedSafely() async throws {
+        let httpClient = MockTransportHTTPClient()
+        let tokenProvider = TokenProvider(tokens: [token("percent-token")])
+        await httpClient.enqueue(response: httpResponse(statusCode: 200, body: "{}"))
+        let transport = makeTransport(httpClient: httpClient, tokenProvider: tokenProvider)
+
+        _ = try await transport.send(WebexRequest(path: "/v1/rooms/100% legit"))
+
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.url?.absoluteString, "https://webexapis.com/v1/rooms/100%25%20legit")
+    }
+
+    func testExplicitPercentEncodedPathPreservesEscapedPathSeparators() async throws {
+        let httpClient = MockTransportHTTPClient()
+        let tokenProvider = TokenProvider(tokens: [token("encoded-path-token")])
+        await httpClient.enqueue(response: httpResponse(statusCode: 200, body: "{}"))
+        let transport = makeTransport(httpClient: httpClient, tokenProvider: tokenProvider)
+
+        _ = try await transport.send(WebexRequest(
+            path: "/v1/rooms/room%2Fid+1",
+            isPathPercentEncoded: true
+        ))
+
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.url?.absoluteString, "https://webexapis.com/v1/rooms/room%2Fid+1")
+    }
+
+    func testInvalidExplicitPercentEncodedPathThrowsSafeErrorWithoutTokenOrHTTP() async throws {
+        let httpClient = MockTransportHTTPClient()
+        let tokenProvider = TokenProvider(tokens: [token("encoded-path-secret-token")])
+        let transport = makeTransport(httpClient: httpClient, tokenProvider: tokenProvider)
+
+        do {
+            _ = try await transport.send(WebexRequest(
+                path: "/v1/rooms/100% legit",
+                isPathPercentEncoded: true
+            ))
+            XCTFail("Expected invalid encoded path error")
+        } catch let error as WebexSDKError {
+            guard case .network(let message) = error else {
+                return XCTFail("Expected network error, got \(error)")
+            }
+
+            XCTAssertEqual(message, "Invalid Webex API request path")
+            assertSensitiveValuesRedacted(in: String(describing: error), extraSecrets: ["encoded-path-secret-token"])
+        }
+
+        let requestCount = await httpClient.requestCount()
+        let tokenCallCount = await tokenProvider.tokenCallCount()
+        XCTAssertEqual(requestCount, 0)
+        XCTAssertEqual(tokenCallCount, 0)
+    }
+
     func testBodyIsPreservedAndDefaultsJSONContentType() async throws {
         let httpClient = MockTransportHTTPClient()
         let tokenProvider = TokenProvider(tokens: [token("body-token")])

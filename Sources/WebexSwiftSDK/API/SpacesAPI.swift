@@ -184,7 +184,8 @@ public struct SpacesAPI: Sendable {
 
     public func get(spaceID: String) async throws -> WebexSpace {
         let data = try await transport.send(WebexRequest(
-            path: try spacePath(spaceID)
+            path: try spacePath(spaceID),
+            isPathPercentEncoded: true
         ))
         return try JSONDecoder().decode(WebexSpace.self, from: data)
     }
@@ -194,6 +195,7 @@ public struct SpacesAPI: Sendable {
         let data = try await transport.send(WebexRequest(
             method: "PUT",
             path: try spacePath(spaceID),
+            isPathPercentEncoded: true,
             body: body
         ))
         return try JSONDecoder().decode(WebexSpace.self, from: data)
@@ -202,7 +204,8 @@ public struct SpacesAPI: Sendable {
     public func delete(spaceID: String) async throws {
         _ = try await transport.send(WebexRequest(
             method: "DELETE",
-            path: try spacePath(spaceID)
+            path: try spacePath(spaceID),
+            isPathPercentEncoded: true
         ))
     }
 
