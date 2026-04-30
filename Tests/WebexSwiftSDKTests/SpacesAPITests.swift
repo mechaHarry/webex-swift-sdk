@@ -69,6 +69,63 @@ final class SpacesAPITests: XCTestCase {
         }
     }
 
+    func testListSpacesSendsTypedQueryAndDecodesPage() async throws {
+        let httpClient = MockSpacesHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            headers: ["Link": #"<https://webexapis.com/v1/rooms?cursor=next>; rel="next""#],
+            body: #"{"items":[{"id":"space-1","title":"One","type":"group"}]}"#
+        ))
+        let api = makeAPI(httpClient: httpClient)
+
+        let page = try await api.list(query: ListSpacesQuery(
+            teamID: "team-1",
+            type: .group,
+            sortBy: .lastActivity,
+            max: 50
+        ))
+
+        XCTAssertEqual(page.items.map(\.id), ["space-1"])
+        XCTAssertEqual(page.nextPage?.url.absoluteString, "https://webexapis.com/v1/rooms?cursor=next")
+        let requests = await httpClient.recordedRequests()
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(
+            requests[0].url?.absoluteString,
+            "https://webexapis.com/v1/rooms?teamId=team-1&type=group&sortBy=lastactivity&max=50"
+        )
+        XCTAssertEqual(requests[0].httpMethod, "GET")
+        XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer spaces-token")
+    }
+
+    func testListAllFollowsNextLinksThroughEmptyPages() async throws {
+        let httpClient = MockSpacesHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            headers: ["Link": #"<https://webexapis.com/v1/rooms?cursor=second>; rel="next""#],
+            body: #"{"items":[{"id":"space-1","title":"One"}]}"#
+        ))
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            headers: ["Link": #"<https://webexapis.com/v1/rooms?cursor=third>; rel="next""#],
+            body: #"{"items":[]}"#
+        ))
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            body: #"{"items":[{"id":"space-3","title":"Three"}]}"#
+        ))
+        let api = makeAPI(httpClient: httpClient)
+
+        let spaces = try await api.listAll(query: .init(max: 2))
+
+        XCTAssertEqual(spaces.map(\.id), ["space-1", "space-3"])
+        let requests = await httpClient.recordedRequests()
+        XCTAssertEqual(requests.map { $0.url?.absoluteString }, [
+            "https://webexapis.com/v1/rooms?max=2",
+            "https://webexapis.com/v1/rooms?cursor=second",
+            "https://webexapis.com/v1/rooms?cursor=third"
+        ])
+    }
+
     private func iso8601(_ date: Date?) -> String? {
         guard let date else {
             return nil
@@ -77,5 +134,53 @@ final class SpacesAPITests: XCTestCase {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.string(from: date)
+    }
+}
+
+private func makeAPI(httpClient: HTTPClient) -> SpacesAPI {
+    SpacesAPI(transport: WebexTransport(httpClient: httpClient) {
+        AccessTokenState(
+            value: "spaces-token",
+            expiresAt: Date(timeIntervalSince1970: 1_000),
+            tokenType: "Bearer"
+        )
+    })
+}
+
+private func httpResponse(
+    statusCode: Int,
+    headers: [String: String] = [:],
+    body: String
+) -> HTTPResponse {
+    HTTPResponse(
+        data: Data(body.utf8),
+        response: HTTPURLResponse(
+            url: URL(string: "https://webexapis.com/v1/rooms")!,
+            statusCode: statusCode,
+            httpVersion: "HTTP/1.1",
+            headerFields: headers
+        )!
+    )
+}
+
+private actor MockSpacesHTTPClient: HTTPClient {
+    private var responses: [HTTPResponse] = []
+    private var requests: [URLRequest] = []
+
+    func enqueue(response: HTTPResponse) {
+        responses.append(response)
+    }
+
+    func recordedRequests() -> [URLRequest] {
+        requests
+    }
+
+    func send(_ request: URLRequest) async throws -> HTTPResponse {
+        requests.append(request)
+        guard !responses.isEmpty else {
+            throw WebexSDKError.network("Unexpected spaces request")
+        }
+
+        return responses.removeFirst()
     }
 }
