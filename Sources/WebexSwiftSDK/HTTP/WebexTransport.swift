@@ -231,7 +231,7 @@ public struct WebexTransport: Sendable {
         if response.response.statusCode == 423 {
             return .locked(
                 retryAfter: retryPolicy.retryAfter(from: response.response),
-                trackingID: trackingID(from: response.response),
+                trackingID: trackingID(from: response.response, accessToken: accessToken),
                 message: responseMessage(from: response, accessToken: accessToken)
             )
         }
@@ -267,6 +267,14 @@ public struct WebexTransport: Sendable {
         }
 
         return nil
+    }
+
+    private func trackingID(from response: HTTPURLResponse, accessToken: String) -> String? {
+        guard let trackingID = trackingID(from: response) else {
+            return nil
+        }
+
+        return redact(trackingID, accessToken: accessToken)
     }
 
     private func redactedNetworkError(_ error: WebexSDKError, accessToken: String?) -> WebexSDKError {

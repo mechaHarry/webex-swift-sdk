@@ -504,6 +504,30 @@ final class WebexTransportTests: XCTestCase {
         XCTAssertEqual(delays, [])
     }
 
+    func testLockedResponseRedactsAccessTokenFromTrackingID() async throws {
+        let httpClient = MockTransportHTTPClient()
+        let tokenProvider = TokenProvider(tokens: [token("locked-secret-token")])
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 423,
+            headers: ["trackingId": "trace locked-secret-token"],
+            body: #"{"message":"locked"}"#
+        ))
+        let transport = makeTransport(httpClient: httpClient, tokenProvider: tokenProvider)
+
+        do {
+            _ = try await transport.send(WebexRequest(path: "v1/rooms"))
+            XCTFail("Expected locked error")
+        } catch let error as WebexSDKError {
+            guard case .locked(_, let trackingID, _) = error else {
+                return XCTFail("Expected locked error, got \(error)")
+            }
+
+            XCTAssertNotNil(trackingID)
+            XCTAssertFalse(trackingID?.contains("locked-secret-token") == true)
+            XCTAssertFalse(String(describing: error).contains("locked-secret-token"))
+        }
+    }
+
     func testAPIErrorKindClassifiesDocumentedStatuses() {
         let mappings: [(WebexSDKError, WebexAPIErrorKind)] = [
             (.webexAPI(statusCode: 400, trackingID: nil, message: "bad"), .badRequest),
