@@ -7,28 +7,40 @@ This example:
 - creates a `WebexIntegrationConfiguration` from environment variables
 - stores a new local account in `WebexClientRegistry`
 - builds a PKCE authorization URL
-- exchanges the pasted OAuth redirect callback for tokens
+- receives the OAuth redirect through the SDK-owned loopback listener
+- exchanges the authorization code for tokens
 - stores the refresh-token record in the registry store
-- creates `WebexClient` from the registry
+- creates `WebexClient` with the initial access token in memory
 - calls `people.me()` and prints the returned profile fields
 
 It does not print raw access tokens, refresh tokens, authorization codes, or client secrets.
 
 ## Run
 
-Create a Webex integration whose redirect URI exactly matches `WEBEX_REDIRECT_URI`, then run:
+Create a Webex integration whose redirect URI is:
+
+```text
+http://127.0.0.1:8282/oauth/callback
+```
+
+Then run:
 
 ```bash
 cd Examples/WebexClientSmoke
 
 WEBEX_CLIENT_ID="your-client-id" \
 WEBEX_CLIENT_SECRET="your-client-secret" \
-WEBEX_REDIRECT_URI="your-registered-redirect-uri" \
 WEBEX_SCOPES="spark:people_read" \
 swift run WebexClientSmoke
 ```
 
-When the browser redirects, paste the full redirect URL back into the terminal.
+The SDK opens a temporary listener on `127.0.0.1:8282`, waits for the browser redirect, then closes the listener after the callback is received.
+
+If your Webex integration uses a different registered loopback URI, override it with:
+
+```bash
+WEBEX_REDIRECT_URI="http://127.0.0.1:8282/oauth/callback"
+```
 
 By default, the example stores credentials and refresh-token records under the Keychain service `com.webex.swift-sdk.smoke`. Override it per run with:
 

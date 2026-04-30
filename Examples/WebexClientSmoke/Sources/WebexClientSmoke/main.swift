@@ -24,47 +24,27 @@ struct WebexClientSmoke {
         let registry = WebexClientRegistry(store: store, httpClient: httpClient)
 
         print("Using Keychain service: \(keychainService)")
-        print("Creating registry account for client id: \(configuration.clientID)")
-        let account = try await registry.addAccount(configuration: configuration)
-        print("Created local account id: \(account.id.rawValue)")
-
-        let codeVerifier = try PKCE.generateVerifier()
-        let state = UUID().uuidString
-        let authorizationURL = try WebexAuthorizationRequest(
+        print("Using redirect URI: \(configuration.redirectURI.absoluteString)")
+        print("Creating registry account and opening Webex authorization for client id: \(configuration.clientID)")
+        let authorized = try await registry.authorizeAndAddAccount(
             configuration: configuration,
-            state: state,
-            codeChallenge: PKCE.s256Challenge(for: codeVerifier)
-        ).url()
-
-        print("")
-        print("Opening Webex authorization URL in your default browser.")
-        print("If the browser does not open, paste this URL manually:")
-        print(authorizationURL.absoluteString)
-        print("")
-        NSWorkspace.shared.open(authorizationURL)
-
-        print("After Webex redirects, paste the full redirect URL here:")
-        guard let callbackURLString = readLine()?.trimmingCharacters(in: .whitespacesAndNewlines),
-              let callbackURL = URL(string: callbackURLString),
-              !callbackURLString.isEmpty else {
-            throw SmokeError.missingCallbackURL
-        }
-
-        let authorizationCode = try OAuthCallbackParser.parse(callbackURL: callbackURL, expectedState: state)
-        let tokenResponse = try await exchangeAuthorizationCode(
-            authorizationCode.code,
-            codeVerifier: codeVerifier,
-            configuration: configuration,
-            httpClient: httpClient
+            openAuthorizationURL: { authorizationURL in
+                print("")
+                print("Opening Webex authorization URL in your default browser.")
+                print("If the browser does not open, paste this URL manually:")
+                print(authorizationURL.absoluteString)
+                print("")
+                guard NSWorkspace.shared.open(authorizationURL) else {
+                    throw SmokeError.failedToOpenAuthorizationURL
+                }
+            }
         )
 
-        let receivedAt = Date()
-        try await store.saveTokenRecord(tokenResponse.tokenRecord(receivedAt: receivedAt), for: account.id)
-        print("Saved refresh token record. Access token expires at: \(tokenResponse.accessTokenState(receivedAt: receivedAt).expiresAt)")
+        print("Created local account id: \(authorized.account.id.rawValue)")
+        print("Saved refresh token record. Access token expires at: \(authorized.accessTokenExpiresAt)")
 
-        let client = try await registry.client(for: account.id)
-        let person = try await client.people.me()
-        try await store.saveMetadata(person.metadata(verifiedAt: Date()), for: account.id)
+        let person = try await authorized.client.people.me()
+        try await store.saveMetadata(person.metadata(verifiedAt: Date()), for: authorized.account.id)
 
         print("")
         print("people.me()")
@@ -79,7 +59,7 @@ struct WebexClientSmoke {
         let environment = ProcessInfo.processInfo.environment
         let clientID = try requiredEnvironment("WEBEX_CLIENT_ID", environment: environment)
         let clientSecret = try requiredEnvironment("WEBEX_CLIENT_SECRET", environment: environment)
-        let redirectURIString = try requiredEnvironment("WEBEX_REDIRECT_URI", environment: environment)
+        let redirectURIString = environment["WEBEX_REDIRECT_URI"] ?? WebexOAuthLoopbackRedirectListener.defaultRedirectURI.absoluteString
         guard let redirectURI = URL(string: redirectURIString) else {
             throw SmokeError.invalidRedirectURI(redirectURIString)
         }
@@ -108,36 +88,12 @@ struct WebexClientSmoke {
 
         return value
     }
-
-    private static func exchangeAuthorizationCode(
-        _ code: String,
-        codeVerifier: String,
-        configuration: WebexIntegrationConfiguration,
-        httpClient: HTTPClient
-    ) async throws -> WebexTokenResponse {
-        let request = try WebexTokenEndpoint.authorizationCodeRequest(
-            configuration: configuration,
-            code: code,
-            codeVerifier: codeVerifier
-        )
-        let response = try await httpClient.send(request)
-        guard (200..<300).contains(response.response.statusCode) else {
-            let body = String(data: response.data, encoding: .utf8) ?? "<non-UTF8 response body>"
-            throw WebexSDKError.tokenExchangeFailed(
-                statusCode: response.response.statusCode,
-                message: body,
-                trackingID: response.response.value(forHTTPHeaderField: "trackingid")
-            )
-        }
-
-        return try JSONDecoder().decode(WebexTokenResponse.self, from: response.data)
-    }
 }
 
 private enum SmokeError: Error, CustomStringConvertible {
     case missingEnvironment(String)
     case invalidRedirectURI(String)
-    case missingCallbackURL
+    case failedToOpenAuthorizationURL
 
     var description: String {
         switch self {
@@ -145,8 +101,8 @@ private enum SmokeError: Error, CustomStringConvertible {
             return "Missing required environment variable \(name)"
         case .invalidRedirectURI(let value):
             return "Invalid WEBEX_REDIRECT_URI: \(value)"
-        case .missingCallbackURL:
-            return "No callback URL was provided"
+        case .failedToOpenAuthorizationURL:
+            return "Failed to open the Webex authorization URL"
         }
     }
 }

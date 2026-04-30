@@ -19,6 +19,7 @@ public actor TokenManager {
         configuration: WebexIntegrationConfiguration,
         tokenStore: WebexTokenStore,
         httpClient: HTTPClient,
+        initialAccessToken: AccessTokenState? = nil,
         refreshLeeway: TimeInterval = 60,
         clock: @escaping @Sendable () -> Date = { Date() },
         retryPolicy: RetryPolicy = RetryPolicy(),
@@ -44,6 +45,7 @@ public actor TokenManager {
         self.clock = clock
         self.retryPolicy = retryPolicy
         self.sleeper = sleeper
+        self.accessToken = initialAccessToken
     }
 
     public func validAccessToken() async throws -> AccessTokenState {

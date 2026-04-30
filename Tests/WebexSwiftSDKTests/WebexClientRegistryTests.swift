@@ -161,6 +161,106 @@ final class WebexClientRegistryTests: XCTestCase {
         }
     }
 
+    func testAuthorizeAndAddAccountStoresTokenOpensAuthorizationURLAndReturnsPrimedClient() async throws {
+        let store = InMemoryWebexStore()
+        let httpClient = RegistryHTTPClient()
+        let registry = WebexClientRegistry(store: store, httpClient: httpClient)
+        await httpClient.enqueue(response: tokenHTTPResponse(accessToken: "access-from-code", refreshToken: "refresh-from-code"))
+        await httpClient.enqueue(response: httpResponse(
+            url: URL(string: "https://webexapis.com/v1/people/me")!,
+            statusCode: 200,
+            body: """
+            {"id":"person-id","emails":["user@example.com"],"displayName":"Ada Lovelace","orgId":"org-id","created":"2026-04-29T10:11:12Z"}
+            """
+        ))
+        let callbackReceiver = FakeOAuthCallbackReceiver(
+            callbackURL: URL(string: "http://127.0.0.1:8282/oauth/callback?code=auth-code&state=fixed-state")!
+        )
+        let opener = AuthorizationURLOpener()
+
+        let authorized = try await registry.authorizeAndAddAccount(
+            configuration: configuration(
+                clientID: "client-1",
+                clientSecret: "client-secret",
+                scopes: ["spark:people_read"],
+                redirectURI: URL(string: "http://127.0.0.1:8282/oauth/callback")!
+            ),
+            now: Date(timeIntervalSince1970: 100),
+            stateGenerator: { "fixed-state" },
+            codeVerifierGenerator: { "fixed-verifier" },
+            clock: { Date(timeIntervalSince1970: 200) },
+            callbackReceiver: callbackReceiver,
+            openAuthorizationURL: { url in
+                await opener.open(url)
+            }
+        )
+        let person = try await authorized.client.people.me()
+
+        XCTAssertEqual(authorized.account.id, authorized.client.accountID)
+        XCTAssertEqual(authorized.accessTokenExpiresAt, Date(timeIntervalSince1970: 800))
+        XCTAssertEqual(authorized.refreshTokenExpiresAt, Date(timeIntervalSince1970: 3_800))
+        XCTAssertEqual(person.id, "person-id")
+
+        let openedURL = try await opener.openedURL()
+        let openedComponents = try XCTUnwrap(URLComponents(url: openedURL, resolvingAgainstBaseURL: false))
+        XCTAssertEqual(openedComponents.queryItems?.firstValue(named: "state"), "fixed-state")
+        XCTAssertEqual(openedComponents.queryItems?.firstValue(named: "redirect_uri"), "http://127.0.0.1:8282/oauth/callback")
+        XCTAssertEqual(openedComponents.queryItems?.firstValue(named: "code_challenge"), PKCE.s256Challenge(for: "fixed-verifier"))
+
+        let accountIDs = try await store.loadAccountIDs()
+        let tokenRecord = try await store.loadTokenRecord(for: authorized.account.id)
+        XCTAssertEqual(accountIDs, [authorized.account.id])
+        XCTAssertEqual(tokenRecord?.refreshToken, "refresh-from-code")
+
+        let requests = await httpClient.recordedRequests()
+        XCTAssertEqual(requests.map { $0.url?.path }, ["/v1/access_token", "/v1/people/me"])
+        let tokenRequestBody = String(data: try XCTUnwrap(requests[0].httpBody), encoding: .utf8)
+        XCTAssertTrue(tokenRequestBody?.contains("code=auth-code") == true)
+        XCTAssertTrue(tokenRequestBody?.contains("code_verifier=fixed-verifier") == true)
+        XCTAssertEqual(requests[1].value(forHTTPHeaderField: "Authorization"), "Bearer access-from-code")
+    }
+
+    func testAuthorizeAndAddAccountRollsBackAccountWhenTokenExchangeFails() async throws {
+        let store = InMemoryWebexStore()
+        let httpClient = RegistryHTTPClient()
+        let registry = WebexClientRegistry(store: store, httpClient: httpClient)
+        await httpClient.enqueue(response: httpResponse(
+            url: URL(string: "https://webexapis.com/v1/access_token")!,
+            statusCode: 400,
+            body: "invalid client_secret=client-secret access_token=access-token"
+        ))
+        let callbackReceiver = FakeOAuthCallbackReceiver(
+            callbackURL: URL(string: "http://127.0.0.1:8282/oauth/callback?code=auth-code&state=fixed-state")!
+        )
+
+        do {
+            _ = try await registry.authorizeAndAddAccount(
+                configuration: configuration(
+                    clientID: "client-1",
+                    clientSecret: "client-secret",
+                    redirectURI: URL(string: "http://127.0.0.1:8282/oauth/callback")!
+                ),
+                stateGenerator: { "fixed-state" },
+                codeVerifierGenerator: { "fixed-verifier" },
+                clock: { Date(timeIntervalSince1970: 200) },
+                callbackReceiver: callbackReceiver,
+                openAuthorizationURL: { _ in }
+            )
+            XCTFail("Expected token exchange failure")
+        } catch let error as WebexSDKError {
+            guard case .tokenExchangeFailed(let statusCode, let message, _) = error else {
+                return XCTFail("Expected tokenExchangeFailed, got \(error)")
+            }
+
+            XCTAssertEqual(statusCode, 400)
+            assertNoSecretLeak(in: message)
+            assertNoSecretLeak(in: String(describing: error))
+        }
+
+        let accountIDs = try await store.loadAccountIDs()
+        XCTAssertEqual(accountIDs, [])
+    }
+
     func testRemoveAccountDeletesCredentialTokenMetadataAndIndexEntry() async throws {
         let store = InMemoryWebexStore()
         let registry = WebexClientRegistry(store: store, httpClient: RegistryHTTPClient())
@@ -544,12 +644,13 @@ final class WebexClientRegistryTests: XCTestCase {
         clientID: String,
         clientSecret: String = "client-secret",
         scopes: [String] = ["openid"],
+        redirectURI: URL = URL(string: "myapp://oauth/webex")!,
         prefersEphemeralWebBrowserSession: Bool = false
     ) -> WebexIntegrationConfiguration {
         WebexIntegrationConfiguration(
             clientID: clientID,
             clientSecret: clientSecret,
-            redirectURI: URL(string: "myapp://oauth/webex")!,
+            redirectURI: redirectURI,
             scopes: scopes,
             prefersEphemeralWebBrowserSession: prefersEphemeralWebBrowserSession
         )
@@ -833,5 +934,31 @@ private actor RegistryHTTPClient: HTTPClient {
         case .response(let response):
             return response
         }
+    }
+}
+
+private struct FakeOAuthCallbackReceiver: OAuthCallbackReceiver {
+    let callbackURL: URL
+
+    func receiveCallback() async throws -> URL {
+        callbackURL
+    }
+}
+
+private actor AuthorizationURLOpener {
+    private var url: URL?
+
+    func open(_ url: URL) {
+        self.url = url
+    }
+
+    func openedURL() throws -> URL {
+        try XCTUnwrap(url)
+    }
+}
+
+private extension Array where Element == URLQueryItem {
+    func firstValue(named name: String) -> String? {
+        first { $0.name == name }?.value
     }
 }

@@ -9,6 +9,7 @@ This package provides the OAuth and authenticated REST foundation:
 - user-provided Webex integration credentials
 - PKCE authorization request support
 - Apple-native browser auth boundary
+- SDK-owned loopback redirect listener on `127.0.0.1:8282`
 - Keychain-backed credential and refresh-token storage
 - memory-only access-token cache by default
 - coordinated token refresh
@@ -34,4 +35,4 @@ The host macOS app owns UI, account selection, and window-to-account routing. Th
 
 ## Examples
 
-- `Examples/WebexClientSmoke`: interactive OAuth smoke test that stores a registry account, exchanges an authorization code, creates `WebexClient`, and calls `people.me()`.
+- `Examples/WebexClientSmoke`: interactive OAuth smoke test that uses the SDK-owned loopback listener, stores a registry account, exchanges an authorization code, creates `WebexClient`, and calls `people.me()`.

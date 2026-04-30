@@ -18,6 +18,25 @@ public struct WebexAccountRecord: Equatable, Sendable {
     }
 }
 
+public struct WebexOAuthAuthorizedAccount: Sendable {
+    public let account: WebexAccountRecord
+    public let client: WebexClient
+    public let accessTokenExpiresAt: Date
+    public let refreshTokenExpiresAt: Date
+
+    public init(
+        account: WebexAccountRecord,
+        client: WebexClient,
+        accessTokenExpiresAt: Date,
+        refreshTokenExpiresAt: Date
+    ) {
+        self.account = account
+        self.client = client
+        self.accessTokenExpiresAt = accessTokenExpiresAt
+        self.refreshTokenExpiresAt = refreshTokenExpiresAt
+    }
+}
+
 public protocol WebexClientRegistryStore: WebexCredentialStore, WebexTokenStore, WebexAccountMetadataStore, WebexAccountIndexStore {
     func addAccount(
         accountID: WebexAccountID,
@@ -127,8 +146,108 @@ public actor WebexClientRegistry {
         )
     }
 
+    public func authorizeAndAddAccount(
+        configuration: WebexIntegrationConfiguration,
+        metadata: WebexAccountMetadata = WebexAccountMetadata(),
+        now: Date = Date(),
+        openAuthorizationURL: @escaping @Sendable (URL) async throws -> Void
+    ) async throws -> WebexOAuthAuthorizedAccount {
+        try await authorizeAndAddAccount(
+            configuration: configuration,
+            metadata: metadata,
+            now: now,
+            stateGenerator: { UUID().uuidString },
+            codeVerifierGenerator: { try PKCE.generateVerifier() },
+            clock: { Date() },
+            callbackReceiver: WebexOAuthLoopbackRedirectListener(redirectURI: configuration.redirectURI),
+            openAuthorizationURL: openAuthorizationURL
+        )
+    }
+
+    func authorizeAndAddAccount(
+        configuration: WebexIntegrationConfiguration,
+        metadata: WebexAccountMetadata = WebexAccountMetadata(),
+        now: Date = Date(),
+        stateGenerator: @escaping @Sendable () -> String,
+        codeVerifierGenerator: @escaping @Sendable () throws -> String,
+        clock: @escaping @Sendable () -> Date,
+        callbackReceiver: any OAuthCallbackReceiver,
+        openAuthorizationURL: @escaping @Sendable (URL) async throws -> Void
+    ) async throws -> WebexOAuthAuthorizedAccount {
+        let account = try await addAccount(configuration: configuration, metadata: metadata, now: now)
+
+        do {
+            let codeVerifier = try codeVerifierGenerator()
+            let state = stateGenerator()
+            let authorizationURL = try WebexAuthorizationRequest(
+                configuration: configuration,
+                state: state,
+                codeChallenge: PKCE.s256Challenge(for: codeVerifier)
+            ).url()
+
+            async let callbackURL = callbackReceiver.receiveCallback()
+            try await openAuthorizationURL(authorizationURL)
+
+            let authorizationCode = try OAuthCallbackParser.parse(
+                callbackURL: try await callbackURL,
+                expectedState: state
+            )
+            let tokenResponse = try await exchangeAuthorizationCode(
+                authorizationCode.code,
+                codeVerifier: codeVerifier,
+                configuration: configuration
+            )
+            let receivedAt = clock()
+            let tokenRecord = tokenResponse.tokenRecord(receivedAt: receivedAt)
+            let accessToken = tokenResponse.accessTokenState(receivedAt: receivedAt)
+            try await store.saveTokenRecord(tokenRecord, for: account.id)
+
+            let client = WebexClient(
+                accountID: account.id,
+                configuration: configuration,
+                tokenStore: store,
+                httpClient: httpClient,
+                initialAccessToken: accessToken,
+                clock: clock
+            )
+
+            return WebexOAuthAuthorizedAccount(
+                account: account,
+                client: client,
+                accessTokenExpiresAt: accessToken.expiresAt,
+                refreshTokenExpiresAt: tokenRecord.refreshTokenExpiresAt
+            )
+        } catch {
+            try? await removeAccount(account.id)
+            throw error
+        }
+    }
+
     public func removeAccount(_ accountID: WebexAccountID) async throws {
         try Task.checkCancellation()
         try await store.removeAccount(accountID: accountID)
+    }
+
+    private func exchangeAuthorizationCode(
+        _ code: String,
+        codeVerifier: String,
+        configuration: WebexIntegrationConfiguration
+    ) async throws -> WebexTokenResponse {
+        let request = try WebexTokenEndpoint.authorizationCodeRequest(
+            configuration: configuration,
+            code: code,
+            codeVerifier: codeVerifier
+        )
+        let response = try await httpClient.send(request)
+        guard (200..<300).contains(response.response.statusCode) else {
+            let body = String(data: response.data, encoding: .utf8) ?? "<non-UTF8 response body>"
+            throw WebexSDKError.tokenExchangeFailed(
+                statusCode: response.response.statusCode,
+                message: Redactor.redactSecrets(body),
+                trackingID: response.response.value(forHTTPHeaderField: "trackingid")
+            )
+        }
+
+        return try JSONDecoder().decode(WebexTokenResponse.self, from: response.data)
     }
 }

@@ -10,13 +10,17 @@ public struct WebexClient: Sendable {
         accountID: WebexAccountID,
         configuration: WebexIntegrationConfiguration,
         tokenStore: WebexTokenStore,
-        httpClient: HTTPClient = URLSessionHTTPClient()
+        httpClient: HTTPClient = URLSessionHTTPClient(),
+        initialAccessToken: AccessTokenState? = nil,
+        clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         let tokenManager = TokenManager(
             accountID: accountID,
             configuration: configuration,
             tokenStore: tokenStore,
-            httpClient: httpClient
+            httpClient: httpClient,
+            initialAccessToken: initialAccessToken,
+            clock: clock
         )
         let transport = WebexTransport(
             httpClient: httpClient,
