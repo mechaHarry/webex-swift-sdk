@@ -57,6 +57,18 @@ final class SpacesAPITests: XCTestCase {
         XCTAssertEqual(space.type, .unknown("future-type"))
     }
 
+    func testSpaceRejectsInvalidTimestamp() throws {
+        let json = Data(#"{"id":"space-id","created":"not-a-date"}"#.utf8)
+
+        XCTAssertThrowsError(try JSONDecoder().decode(WebexSpace.self, from: json)) { error in
+            guard case DecodingError.dataCorrupted(let context) = error else {
+                return XCTFail("Expected dataCorrupted error, got \(error)")
+            }
+
+            XCTAssertEqual(context.debugDescription, "Invalid Webex timestamp")
+        }
+    }
+
     private func iso8601(_ date: Date?) -> String? {
         guard let date else {
             return nil

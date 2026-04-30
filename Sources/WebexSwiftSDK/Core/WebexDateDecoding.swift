@@ -1,6 +1,8 @@
 import Foundation
 
 enum WebexDateDecoding {
+    private static let parser = WebexDateParser()
+
     static func decodeIfPresent<Key: CodingKey>(
         from container: KeyedDecodingContainer<Key>,
         forKey key: Key
@@ -21,14 +23,29 @@ enum WebexDateDecoding {
     }
 
     private static func parse(_ value: String) -> Date? {
-        let fractionalFormatter = ISO8601DateFormatter()
-        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractionalFormatter.date(from: value) {
-            return date
+        parser.date(from: value)
+    }
+}
+
+private final class WebexDateParser: @unchecked Sendable {
+    private let lock = NSLock()
+    private let fractionalFormatter: ISO8601DateFormatter
+    private let formatter: ISO8601DateFormatter
+
+    init() {
+        self.fractionalFormatter = ISO8601DateFormatter()
+        self.fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        self.formatter = ISO8601DateFormatter()
+        self.formatter.formatOptions = [.withInternetDateTime]
+    }
+
+    func date(from value: String) -> Date? {
+        lock.lock()
+        defer {
+            lock.unlock()
         }
 
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: value)
+        return fractionalFormatter.date(from: value) ?? formatter.date(from: value)
     }
 }
