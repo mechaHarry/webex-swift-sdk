@@ -31,3 +31,7 @@ for account in accounts {
 ```
 
 The host macOS app owns UI, account selection, and window-to-account routing. The SDK owns OAuth, token lifecycle, local secure storage, and authenticated Webex REST execution.
+
+## Examples
+
+- `Examples/WebexClientSmoke`: interactive OAuth smoke test that stores a registry account, exchanges an authorization code, creates `WebexClient`, and calls `people.me()`.
