@@ -202,6 +202,137 @@ final class SpacesAPITests: XCTestCase {
         XCTAssertTrue(requests.isEmpty)
     }
 
+    func testCreateSpacePostsJSONAndDecodesCreatedSpace() async throws {
+        let httpClient = MockSpacesHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 201,
+            body: #"{"id":"created-space","title":"Incident Review","type":"group"}"#
+        ))
+        let api = makeAPI(httpClient: httpClient)
+
+        let space = try await api.create(CreateSpaceRequest(
+            title: "Incident Review",
+            teamID: "team-id",
+            classificationID: "classification-id",
+            isLocked: true,
+            isPublic: true,
+            description: "Public incident room",
+            isAnnouncementOnly: true
+        ))
+
+        XCTAssertEqual(space.id, "created-space")
+        XCTAssertEqual(space.title, "Incident Review")
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.absoluteString, "https://webexapis.com/v1/rooms")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        XCTAssertEqual(json?["title"] as? String, "Incident Review")
+        XCTAssertEqual(json?["teamId"] as? String, "team-id")
+        XCTAssertEqual(json?["classificationId"] as? String, "classification-id")
+        XCTAssertEqual(json?["isLocked"] as? Bool, true)
+        XCTAssertEqual(json?["isPublic"] as? Bool, true)
+        XCTAssertEqual(json?["description"] as? String, "Public incident room")
+        XCTAssertEqual(json?["isAnnouncementOnly"] as? Bool, true)
+    }
+
+    func testGetSpacePercentEncodesPathSegment() async throws {
+        let httpClient = MockSpacesHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            body: #"{"id":"room/id+1","title":"Encoded"}"#
+        ))
+        let api = makeAPI(httpClient: httpClient)
+
+        let space = try await api.get(spaceID: "room/id+1")
+
+        XCTAssertEqual(space.id, "room/id+1")
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.url?.absoluteString, "https://webexapis.com/v1/rooms/room%2Fid+1")
+    }
+
+    func testUpdateSpacePutsOnlyProvidedFields() async throws {
+        let httpClient = MockSpacesHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            body: #"{"id":"space-id","title":"Updated"}"#
+        ))
+        let api = makeAPI(httpClient: httpClient)
+
+        let space = try await api.update(spaceID: "space-id", UpdateSpaceRequest(
+            title: "Updated",
+            description: "Updated description",
+            isLocked: false
+        ))
+
+        XCTAssertEqual(space.title, "Updated")
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.httpMethod, "PUT")
+        XCTAssertEqual(request.url?.absoluteString, "https://webexapis.com/v1/rooms/space-id")
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        XCTAssertEqual(json?["title"] as? String, "Updated")
+        XCTAssertEqual(json?["description"] as? String, "Updated description")
+        XCTAssertEqual(json?["isLocked"] as? Bool, false)
+        XCTAssertNil(json?["teamId"])
+        XCTAssertNil(json?["creatorId"])
+    }
+
+    func testDeleteSpaceSendsDeleteAndAcceptsNoContent() async throws {
+        let httpClient = MockSpacesHTTPClient()
+        await httpClient.enqueue(response: httpResponse(statusCode: 204, body: ""))
+        let api = makeAPI(httpClient: httpClient)
+
+        try await api.delete(spaceID: "space-id")
+
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.httpMethod, "DELETE")
+        XCTAssertEqual(request.url?.absoluteString, "https://webexapis.com/v1/rooms/space-id")
+    }
+
+    func testWebexClientExposesSpacesAndRoomsAlias() async throws {
+        let accountID = WebexAccountID()
+        let store = InMemoryWebexStore()
+        let httpClient = MockSpacesHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            body: #"{"items":[{"id":"space-from-spaces"}]}"#
+        ))
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            body: #"{"items":[{"id":"space-from-rooms"}]}"#
+        ))
+        let client = WebexClient(
+            accountID: accountID,
+            configuration: WebexIntegrationConfiguration(
+                clientID: "client",
+                clientSecret: "secret",
+                redirectURI: URL(string: "myapp://oauth/webex")!,
+                scopes: ["spark:rooms_read"]
+            ),
+            tokenStore: store,
+            httpClient: httpClient,
+            initialAccessToken: AccessTokenState(
+                value: "client-token",
+                expiresAt: Date(timeIntervalSince1970: 1_000),
+                tokenType: "Bearer"
+            ),
+            clock: { Date(timeIntervalSince1970: 0) }
+        )
+
+        let spaces = try await client.spaces.list()
+        let rooms = try await client.rooms.list()
+
+        XCTAssertEqual(spaces.items.map(\.id), ["space-from-spaces"])
+        XCTAssertEqual(rooms.items.map(\.id), ["space-from-rooms"])
+    }
+
     private func iso8601(_ date: Date?) -> String? {
         guard let date else {
             return nil

@@ -143,7 +143,12 @@ public struct WebexTransport: Sendable {
             throw WebexSDKError.network("Invalid Webex API base URL")
         }
 
-        components.path = normalizedPath(request.path)
+        let normalizedPath = normalizedPath(request.path)
+        if normalizedPath.contains("%") {
+            components.percentEncodedPath = normalizedPath
+        } else {
+            components.path = normalizedPath
+        }
         if !request.queryItems.isEmpty {
             components.queryItems = request.queryItems
             components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
