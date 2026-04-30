@@ -40,12 +40,16 @@ The SDK opens a temporary listener on `127.0.0.1:8282`, waits for the browser re
 Use these optional environment variables to bound and filter the listing:
 
 ```bash
-WEBEX_SPACES_PAGE_SIZE="25"
-WEBEX_SPACES_MAX_PAGES="3"
+WEBEX_SPACES_PAGE_SIZE="100"
+WEBEX_SPACES_MAX_PAGES="1000"
 WEBEX_SPACES_TYPE="group"
 WEBEX_SPACES_SORT_BY="lastactivity"
 WEBEX_SPACES_TEAM_ID="your-team-id"
 ```
+
+If the smoke reports `Spaces pagination page cap exceeded`, increase
+`WEBEX_SPACES_MAX_PAGES` or narrow the listing with `WEBEX_SPACES_TYPE` or
+`WEBEX_SPACES_TEAM_ID`.
 
 If your Webex integration uses a different registered loopback URI, override it with:
 

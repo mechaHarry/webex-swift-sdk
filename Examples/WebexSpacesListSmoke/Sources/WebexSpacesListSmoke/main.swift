@@ -10,6 +10,10 @@ struct WebexSpacesListSmoke {
         } catch is CancellationError {
             fputs("Cancelled.\n", stderr)
             Foundation.exit(130)
+        } catch WebexSDKError.network(let message) where message == "Spaces pagination page cap exceeded" {
+            fputs("Spaces list smoke failed: \(message).\n", stderr)
+            fputs("Increase WEBEX_SPACES_MAX_PAGES or narrow the listing with WEBEX_SPACES_TYPE / WEBEX_SPACES_TEAM_ID.\n", stderr)
+            Foundation.exit(1)
         } catch {
             fputs("Spaces list smoke failed: \(error)\n", stderr)
             Foundation.exit(1)
@@ -122,7 +126,7 @@ struct WebexSpacesListSmoke {
     }
 }
 
-private struct ListOptions {
+struct ListOptions {
     let pageSize: Int
     let maxPages: Int
     let query: ListSpacesQuery
@@ -130,16 +134,16 @@ private struct ListOptions {
     init(environment: [String: String]) throws {
         self.pageSize = try Self.integer(
             named: "WEBEX_SPACES_PAGE_SIZE",
-            defaultValue: 25,
+            defaultValue: 100,
             minimum: 1,
             maximum: 1_000,
             environment: environment
         )
         self.maxPages = try Self.integer(
             named: "WEBEX_SPACES_MAX_PAGES",
-            defaultValue: 3,
+            defaultValue: 1_000,
             minimum: 1,
-            maximum: 100,
+            maximum: 10_000,
             environment: environment
         )
         self.query = ListSpacesQuery(

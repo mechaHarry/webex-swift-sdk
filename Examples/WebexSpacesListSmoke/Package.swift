@@ -15,6 +15,10 @@ let package = Package(
             dependencies: [
                 .product(name: "WebexSwiftSDK", package: "webex-swift-sdk")
             ]
+        ),
+        .testTarget(
+            name: "WebexSpacesListSmokeTests",
+            dependencies: ["WebexSpacesListSmoke"]
         )
     ]
 )
