@@ -126,6 +126,82 @@ final class SpacesAPITests: XCTestCase {
         ])
     }
 
+    func testListAllRejectsRepeatedNextLinkWithoutLeakingURLOrToken() async throws {
+        let httpClient = MockSpacesHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            headers: ["Link": #"<https://webexapis.com/v1/rooms?cursor=loop>; rel="next""#],
+            body: #"{"items":[{"id":"space-1","title":"One"}]}"#
+        ))
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            headers: ["Link": #"<https://webexapis.com/v1/rooms?cursor=loop>; rel="next""#],
+            body: #"{"items":[{"id":"space-2","title":"Two"}]}"#
+        ))
+        let api = makeAPI(httpClient: httpClient)
+
+        do {
+            _ = try await api.listAll()
+            XCTFail("Expected repeated next link to throw")
+        } catch WebexSDKError.network(let message) {
+            XCTAssertEqual(message, "Repeated Spaces pagination link")
+            XCTAssertFalse(message.contains("cursor=loop"))
+            XCTAssertFalse(message.contains("spaces-token"))
+        } catch {
+            XCTFail("Expected network error, got \(error)")
+        }
+
+        let requests = await httpClient.recordedRequests()
+        XCTAssertEqual(requests.map { $0.url?.absoluteString }, [
+            "https://webexapis.com/v1/rooms",
+            "https://webexapis.com/v1/rooms?cursor=loop"
+        ])
+    }
+
+    func testListAllEnforcesPageCapWithoutFollowingNextLink() async throws {
+        let httpClient = MockSpacesHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            headers: ["Link": #"<https://webexapis.com/v1/rooms?cursor=second>; rel="next""#],
+            body: #"{"items":[{"id":"space-1","title":"One"}]}"#
+        ))
+        let api = makeAPI(httpClient: httpClient)
+
+        do {
+            _ = try await api.listAll(maxPages: 1)
+            XCTFail("Expected page cap to throw")
+        } catch WebexSDKError.network(let message) {
+            XCTAssertEqual(message, "Spaces pagination page cap exceeded")
+            XCTAssertFalse(message.contains("cursor=second"))
+            XCTAssertFalse(message.contains("spaces-token"))
+        } catch {
+            XCTFail("Expected network error, got \(error)")
+        }
+
+        let requests = await httpClient.recordedRequests()
+        XCTAssertEqual(requests.map { $0.url?.absoluteString }, [
+            "https://webexapis.com/v1/rooms"
+        ])
+    }
+
+    func testListAllRejectsInvalidPageCapWithoutRequest() async throws {
+        let httpClient = MockSpacesHTTPClient()
+        let api = makeAPI(httpClient: httpClient)
+
+        do {
+            _ = try await api.listAll(maxPages: 0)
+            XCTFail("Expected invalid page cap to throw")
+        } catch WebexSDKError.network(let message) {
+            XCTAssertEqual(message, "Spaces pagination page cap must be greater than zero")
+            XCTAssertFalse(message.contains("spaces-token"))
+        } catch {
+            XCTFail("Expected network error, got \(error)")
+        }
+
+        let requests = await httpClient.recordedRequests()
+        XCTAssertTrue(requests.isEmpty)
+    }
+
     private func iso8601(_ date: Date?) -> String? {
         guard let date else {
             return nil

@@ -66,13 +66,30 @@ public struct SpacesAPI: Sendable {
         ))
     }
 
-    public func listAll(query: ListSpacesQuery = ListSpacesQuery()) async throws -> [WebexSpace] {
+    public func listAll(
+        query: ListSpacesQuery = ListSpacesQuery(),
+        maxPages: Int = 1_000
+    ) async throws -> [WebexSpace] {
+        guard maxPages > 0 else {
+            throw WebexSDKError.network("Spaces pagination page cap must be greater than zero")
+        }
+
         var page = try await list(query: query)
+        var pagesFetched = 1
+        var seenNextPageURLs: Set<URL> = []
         var spaces = page.items
 
         while let nextPage = page.nextPage {
+            guard pagesFetched < maxPages else {
+                throw WebexSDKError.network("Spaces pagination page cap exceeded")
+            }
+            guard seenNextPageURLs.insert(nextPage.url).inserted else {
+                throw WebexSDKError.network("Repeated Spaces pagination link")
+            }
+
             try Task.checkCancellation()
             page = try await list(request: nextPage.request)
+            pagesFetched += 1
             spaces.append(contentsOf: page.items)
         }
 
