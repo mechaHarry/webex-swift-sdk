@@ -58,6 +58,10 @@ public struct WebexTransport: Sendable {
     }
 
     public func send(_ webexRequest: WebexRequest) async throws -> Data {
+        try await sendResponse(webexRequest).data
+    }
+
+    func sendResponse(_ webexRequest: WebexRequest) async throws -> HTTPResponse {
         let url = try buildURL(for: webexRequest)
         var didRetryUnauthorized = false
         var lastAccessToken: String?
@@ -98,7 +102,7 @@ public struct WebexTransport: Sendable {
             }
 
             if (200..<300).contains(response.response.statusCode) {
-                return response.data
+                return response
             }
 
             if response.response.statusCode == 401, !didRetryUnauthorized {
@@ -188,8 +192,15 @@ public struct WebexTransport: Sendable {
     }
 
     private func shouldRetry(response: HTTPResponse, attempt: Int) -> Bool {
-        (response.response.statusCode == 429 || response.response.statusCode >= 500) &&
-            attempt < retryPolicy.maxAttempts
+        guard attempt < retryPolicy.maxAttempts else {
+            return false
+        }
+
+        if response.response.statusCode == 423 {
+            return retryPolicy.retryAfter(from: response.response) != nil
+        }
+
+        return response.response.statusCode == 429 || response.response.statusCode >= 500
     }
 
     private func shouldRetry(error: Error, attempt: Int) -> Bool {
@@ -215,6 +226,14 @@ public struct WebexTransport: Sendable {
     private func responseError(for response: HTTPResponse, accessToken: String) -> WebexSDKError {
         if response.response.statusCode == 429 {
             return .rateLimited(retryAfter: retryPolicy.retryAfter(from: response.response))
+        }
+
+        if response.response.statusCode == 423 {
+            return .locked(
+                retryAfter: retryPolicy.retryAfter(from: response.response),
+                trackingID: trackingID(from: response.response),
+                message: responseMessage(from: response, accessToken: accessToken)
+            )
         }
 
         return .webexAPI(
