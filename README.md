@@ -14,7 +14,7 @@ This package provides the OAuth and authenticated REST foundation:
 - memory-only access-token cache by default
 - coordinated token refresh
 - authenticated REST transport
-- `people.me()` as the first typed Webex endpoint
+- typed People and Spaces APIs
 
 ## Example
 
@@ -33,6 +33,31 @@ for account in accounts {
 
 The host macOS app owns UI, account selection, and window-to-account routing. The SDK owns OAuth, token lifecycle, local secure storage, and authenticated Webex REST execution.
 
+## Spaces
+
+Webex's REST API still uses `/v1/rooms`, while modern product language calls
+these collaboration containers spaces. The SDK exposes `client.spaces` as the
+preferred interface and `client.rooms` as a compatibility alias.
+
+```swift
+let page = try await client.spaces.list(query: .init(max: 50))
+for space in page.items {
+    print(space.id, space.title ?? "(untitled)")
+}
+
+let allSpaces = try await client.spaces.listAll(query: .init(type: .group))
+let created = try await client.spaces.create(.init(title: "Incident Review"))
+let updated = try await client.spaces.update(
+    spaceID: created.id,
+    .init(title: "Incident Review - Closed")
+)
+try await client.spaces.delete(spaceID: updated.id)
+```
+
+For developers following Webex's endpoint reference, `client.rooms` maps to the
+same implementation as `client.spaces`.
+
 ## Examples
 
 - `Examples/WebexClientSmoke`: interactive OAuth smoke test that uses the SDK-owned loopback listener, stores a registry account, exchanges an authorization code, creates `WebexClient`, and calls `people.me()`.
+- `Examples/WebexSpacesListSmoke`: interactive OAuth smoke test that lists Spaces with `client.spaces.listAll(...)` using bounded pagination.

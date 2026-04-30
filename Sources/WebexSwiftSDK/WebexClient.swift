@@ -3,6 +3,11 @@ import Foundation
 public struct WebexClient: Sendable {
     public let accountID: WebexAccountID
     public let people: PeopleAPI
+    public let spaces: SpacesAPI
+
+    public var rooms: RoomsAPI {
+        spaces
+    }
 
     private let tokenManager: TokenManager
 
@@ -34,6 +39,7 @@ public struct WebexClient: Sendable {
 
         self.accountID = accountID
         self.people = PeopleAPI(transport: transport)
+        self.spaces = SpacesAPI(transport: transport)
         self.tokenManager = tokenManager
     }
 }

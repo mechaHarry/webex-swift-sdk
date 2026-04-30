@@ -65,6 +65,61 @@ final class WebexTransportTests: XCTestCase {
         XCTAssertFalse(request.url?.absoluteString.contains("user+webex") == true)
     }
 
+    func testRawPathContainingLiteralPercentIsEncodedSafely() async throws {
+        let httpClient = MockTransportHTTPClient()
+        let tokenProvider = TokenProvider(tokens: [token("percent-token")])
+        await httpClient.enqueue(response: httpResponse(statusCode: 200, body: "{}"))
+        let transport = makeTransport(httpClient: httpClient, tokenProvider: tokenProvider)
+
+        _ = try await transport.send(WebexRequest(path: "/v1/rooms/100% legit"))
+
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.url?.absoluteString, "https://webexapis.com/v1/rooms/100%25%20legit")
+    }
+
+    func testExplicitPercentEncodedPathPreservesEscapedPathSeparators() async throws {
+        let httpClient = MockTransportHTTPClient()
+        let tokenProvider = TokenProvider(tokens: [token("encoded-path-token")])
+        await httpClient.enqueue(response: httpResponse(statusCode: 200, body: "{}"))
+        let transport = makeTransport(httpClient: httpClient, tokenProvider: tokenProvider)
+
+        _ = try await transport.send(WebexRequest(
+            path: "/v1/rooms/room%2Fid+1",
+            isPathPercentEncoded: true
+        ))
+
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.url?.absoluteString, "https://webexapis.com/v1/rooms/room%2Fid+1")
+    }
+
+    func testInvalidExplicitPercentEncodedPathThrowsSafeErrorWithoutTokenOrHTTP() async throws {
+        let httpClient = MockTransportHTTPClient()
+        let tokenProvider = TokenProvider(tokens: [token("encoded-path-secret-token")])
+        let transport = makeTransport(httpClient: httpClient, tokenProvider: tokenProvider)
+
+        do {
+            _ = try await transport.send(WebexRequest(
+                path: "/v1/rooms/100% legit",
+                isPathPercentEncoded: true
+            ))
+            XCTFail("Expected invalid encoded path error")
+        } catch let error as WebexSDKError {
+            guard case .network(let message) = error else {
+                return XCTFail("Expected network error, got \(error)")
+            }
+
+            XCTAssertEqual(message, "Invalid Webex API request path")
+            assertSensitiveValuesRedacted(in: String(describing: error), extraSecrets: ["encoded-path-secret-token"])
+        }
+
+        let requestCount = await httpClient.requestCount()
+        let tokenCallCount = await tokenProvider.tokenCallCount()
+        XCTAssertEqual(requestCount, 0)
+        XCTAssertEqual(tokenCallCount, 0)
+    }
+
     func testBodyIsPreservedAndDefaultsJSONContentType() async throws {
         let httpClient = MockTransportHTTPClient()
         let tokenProvider = TokenProvider(tokens: [token("body-token")])
@@ -421,6 +476,136 @@ final class WebexTransportTests: XCTestCase {
         let tokenCallCount = await tokenProvider.tokenCallCount()
         XCTAssertEqual(requestCount, 0)
         XCTAssertEqual(tokenCallCount, 0)
+    }
+
+    func testSendResponseReturnsDataAndHeadersForSuccessfulRequest() async throws {
+        let httpClient = MockTransportHTTPClient()
+        let tokenProvider = TokenProvider(tokens: [token("response-token")])
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            headers: ["Link": #"<https://webexapis.com/v1/rooms?cursor=next>; rel="next""#],
+            body: #"{"items":[]}"#
+        ))
+        let transport = makeTransport(httpClient: httpClient, tokenProvider: tokenProvider)
+
+        let response = try await transport.sendResponse(WebexRequest(path: "v1/rooms"))
+
+        XCTAssertEqual(String(data: response.data, encoding: .utf8), #"{"items":[]}"#)
+        XCTAssertEqual(response.response.value(forHTTPHeaderField: "Link"), #"<https://webexapis.com/v1/rooms?cursor=next>; rel="next""#)
+        let requests = await httpClient.recordedRequests()
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer response-token")
+    }
+
+    func testLockedResponseRetriesWhenRetryAfterIsPresent() async throws {
+        let httpClient = MockTransportHTTPClient()
+        let sleeper = SleepRecorder()
+        let tokenProvider = TokenProvider(tokens: [token("locked-token"), token("locked-token")])
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 423,
+            headers: ["Retry-After": "1.5"],
+            body: #"{"message":"locked"}"#
+        ))
+        await httpClient.enqueue(response: httpResponse(statusCode: 200, body: #"{"ok":true}"#))
+        let transport = makeTransport(
+            httpClient: httpClient,
+            tokenProvider: tokenProvider,
+            retryPolicy: RetryPolicy(maxAttempts: 2, baseDelay: 0.5, jitter: 0),
+            sleeper: { delay in try await sleeper.sleep(for: delay) }
+        )
+
+        let data = try await transport.send(WebexRequest(path: "v1/rooms"))
+
+        XCTAssertEqual(String(data: data, encoding: .utf8), #"{"ok":true}"#)
+        let requestCount = await httpClient.requestCount()
+        let delays = await sleeper.recordedDelays()
+        XCTAssertEqual(requestCount, 2)
+        XCTAssertEqual(delays, [1.5])
+    }
+
+    func testLockedResponseWithoutRetryAfterDoesNotRetryAndIsClassified() async throws {
+        let httpClient = MockTransportHTTPClient()
+        let sleeper = SleepRecorder()
+        let tokenProvider = TokenProvider(tokens: [token("locked-secret-token")])
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 423,
+            body: #"{"message":"locked locked-secret-token"}"#
+        ))
+        let transport = makeTransport(
+            httpClient: httpClient,
+            tokenProvider: tokenProvider,
+            retryPolicy: RetryPolicy(maxAttempts: 2, baseDelay: 0.5, jitter: 0),
+            sleeper: { delay in try await sleeper.sleep(for: delay) }
+        )
+
+        do {
+            _ = try await transport.send(WebexRequest(path: "v1/rooms"))
+            XCTFail("Expected locked error")
+        } catch let error as WebexSDKError {
+            guard case .locked(let retryAfter, let trackingID, let message) = error else {
+                return XCTFail("Expected locked error, got \(error)")
+            }
+
+            XCTAssertNil(retryAfter)
+            XCTAssertNil(trackingID)
+            XCTAssertTrue(message.contains("locked"))
+            XCTAssertEqual(error.apiErrorKind, .locked(retryAfter: nil))
+            assertSensitiveValuesRedacted(in: String(describing: error), extraSecrets: ["locked-secret-token"])
+        }
+
+        let requestCount = await httpClient.requestCount()
+        let delays = await sleeper.recordedDelays()
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertEqual(delays, [])
+    }
+
+    func testLockedResponseRedactsAccessTokenFromTrackingID() async throws {
+        let httpClient = MockTransportHTTPClient()
+        let tokenProvider = TokenProvider(tokens: [token("locked-secret-token")])
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 423,
+            headers: ["trackingId": "trace locked-secret-token"],
+            body: #"{"message":"locked"}"#
+        ))
+        let transport = makeTransport(httpClient: httpClient, tokenProvider: tokenProvider)
+
+        do {
+            _ = try await transport.send(WebexRequest(path: "v1/rooms"))
+            XCTFail("Expected locked error")
+        } catch let error as WebexSDKError {
+            guard case .locked(_, let trackingID, _) = error else {
+                return XCTFail("Expected locked error, got \(error)")
+            }
+
+            XCTAssertNotNil(trackingID)
+            XCTAssertFalse(trackingID?.contains("locked-secret-token") == true)
+            XCTAssertFalse(String(describing: error).contains("locked-secret-token"))
+        }
+    }
+
+    func testAPIErrorKindClassifiesDocumentedStatuses() {
+        let mappings: [(WebexSDKError, WebexAPIErrorKind)] = [
+            (.webexAPI(statusCode: 400, trackingID: nil, message: "bad"), .badRequest),
+            (.webexAPI(statusCode: 401, trackingID: nil, message: "auth"), .unauthorized),
+            (.webexAPI(statusCode: 403, trackingID: nil, message: "forbidden"), .forbidden),
+            (.webexAPI(statusCode: 404, trackingID: nil, message: "missing"), .notFound),
+            (.webexAPI(statusCode: 405, trackingID: nil, message: "method"), .methodNotAllowed),
+            (.webexAPI(statusCode: 409, trackingID: nil, message: "conflict"), .conflict),
+            (.webexAPI(statusCode: 410, trackingID: nil, message: "gone"), .gone),
+            (.webexAPI(statusCode: 415, trackingID: nil, message: "media"), .unsupportedMediaType),
+            (.locked(retryAfter: 3.5, trackingID: nil, message: "locked"), .locked(retryAfter: 3.5)),
+            (.webexAPI(statusCode: 428, trackingID: nil, message: "precondition"), .preconditionRequired),
+            (.rateLimited(retryAfter: 2.5), .rateLimited(retryAfter: 2.5)),
+            (.webexAPI(statusCode: 500, trackingID: nil, message: "server"), .serverError),
+            (.webexAPI(statusCode: 502, trackingID: nil, message: "gateway"), .serverError),
+            (.webexAPI(statusCode: 503, trackingID: nil, message: "unavailable"), .serverError),
+            (.webexAPI(statusCode: 504, trackingID: nil, message: "timeout"), .serverError),
+            (.webexAPI(statusCode: 499, trackingID: nil, message: "odd"), .unexpected(statusCode: 499))
+        ]
+
+        for (error, expectedKind) in mappings {
+            XCTAssertEqual(error.apiErrorKind, expectedKind, "Unexpected kind for \(error)")
+        }
     }
 
     private func makeTransport(

@@ -1,5 +1,21 @@
 import Foundation
 
+public enum WebexAPIErrorKind: Equatable, Sendable {
+    case badRequest
+    case unauthorized
+    case forbidden
+    case notFound
+    case methodNotAllowed
+    case conflict
+    case gone
+    case unsupportedMediaType
+    case locked(retryAfter: TimeInterval?)
+    case preconditionRequired
+    case rateLimited(retryAfter: TimeInterval?)
+    case serverError
+    case unexpected(statusCode: Int)
+}
+
 public enum WebexSDKError: Error, Equatable, Sendable {
     case invalidAccountID(String)
     case invalidAuthorizationCallback(String)
@@ -11,8 +27,64 @@ public enum WebexSDKError: Error, Equatable, Sendable {
     case duplicateAccount(existing: WebexAccountID, reason: String)
     case tokenExchangeFailed(statusCode: Int, message: String, trackingID: String?)
     case rateLimited(retryAfter: TimeInterval?)
+    case locked(retryAfter: TimeInterval?, trackingID: String?, message: String)
     case webexAPI(statusCode: Int, trackingID: String?, message: String)
     case network(String)
+}
+
+public extension WebexSDKError {
+    var apiErrorKind: WebexAPIErrorKind? {
+        switch self {
+        case .tokenExchangeFailed(let statusCode, _, _),
+             .webexAPI(let statusCode, _, _):
+            return Self.apiErrorKind(for: statusCode)
+        case .rateLimited(let retryAfter):
+            return .rateLimited(retryAfter: retryAfter)
+        case .locked(let retryAfter, _, _):
+            return .locked(retryAfter: retryAfter)
+        case .invalidAccountID,
+             .invalidAuthorizationCallback,
+             .authorizationStateMismatch,
+             .userCancelledAuthorization,
+             .missingCredential,
+             .missingRefreshToken,
+             .reauthenticationRequired,
+             .duplicateAccount,
+             .network:
+            return nil
+        }
+    }
+
+    private static func apiErrorKind(for statusCode: Int) -> WebexAPIErrorKind {
+        switch statusCode {
+        case 400:
+            return .badRequest
+        case 401:
+            return .unauthorized
+        case 403:
+            return .forbidden
+        case 404:
+            return .notFound
+        case 405:
+            return .methodNotAllowed
+        case 409:
+            return .conflict
+        case 410:
+            return .gone
+        case 415:
+            return .unsupportedMediaType
+        case 423:
+            return .locked(retryAfter: nil)
+        case 428:
+            return .preconditionRequired
+        case 429:
+            return .rateLimited(retryAfter: nil)
+        case 500...599:
+            return .serverError
+        default:
+            return .unexpected(statusCode: statusCode)
+        }
+    }
 }
 
 extension WebexSDKError: CustomStringConvertible {
@@ -44,6 +116,9 @@ extension WebexSDKError: CustomStringConvertible {
                 return "Rate limited; retry after \(retryAfter) seconds"
             }
             return "Rate limited"
+        case .locked(let retryAfter, let trackingID, let message):
+            let retryDescription = retryAfter.map { "; retry after \($0) seconds" } ?? ""
+            return "Webex API resource locked\(retryDescription): \(Redactor.redactSecrets(message))\(trackingIDDescription(trackingID))"
         case .webexAPI(let statusCode, let trackingID, let message):
             return "Webex API failed with status \(statusCode): \(Redactor.redactSecrets(message))\(trackingIDDescription(trackingID))"
         case .network(let message):

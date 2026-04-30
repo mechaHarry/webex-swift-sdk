@@ -3,6 +3,7 @@ import Foundation
 public struct WebexRequest: Sendable {
     public let method: String
     public let path: String
+    public let isPathPercentEncoded: Bool
     public let queryItems: [URLQueryItem]
     public let headers: [String: String]
     public let body: Data?
@@ -10,12 +11,14 @@ public struct WebexRequest: Sendable {
     public init(
         method: String = "GET",
         path: String,
+        isPathPercentEncoded: Bool = false,
         queryItems: [URLQueryItem] = [],
         headers: [String: String] = [:],
         body: Data? = nil
     ) {
         self.method = method
         self.path = path
+        self.isPathPercentEncoded = isPathPercentEncoded
         self.queryItems = queryItems
         self.headers = headers
         self.body = body
@@ -58,6 +61,10 @@ public struct WebexTransport: Sendable {
     }
 
     public func send(_ webexRequest: WebexRequest) async throws -> Data {
+        try await sendResponse(webexRequest).data
+    }
+
+    func sendResponse(_ webexRequest: WebexRequest) async throws -> HTTPResponse {
         let url = try buildURL(for: webexRequest)
         var didRetryUnauthorized = false
         var lastAccessToken: String?
@@ -98,7 +105,7 @@ public struct WebexTransport: Sendable {
             }
 
             if (200..<300).contains(response.response.statusCode) {
-                return response.data
+                return response
             }
 
             if response.response.statusCode == 401, !didRetryUnauthorized {
@@ -139,7 +146,15 @@ public struct WebexTransport: Sendable {
             throw WebexSDKError.network("Invalid Webex API base URL")
         }
 
-        components.path = normalizedPath(request.path)
+        let normalizedPath = normalizedPath(request.path)
+        if request.isPathPercentEncoded {
+            guard isValidPercentEncodedPath(normalizedPath) else {
+                throw WebexSDKError.network("Invalid Webex API request path")
+            }
+            components.percentEncodedPath = normalizedPath
+        } else {
+            components.path = normalizedPath
+        }
         if !request.queryItems.isEmpty {
             components.queryItems = request.queryItems
             components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
@@ -162,6 +177,41 @@ public struct WebexTransport: Sendable {
         }
 
         return "/" + path
+    }
+
+    private func isValidPercentEncodedPath(_ path: String) -> Bool {
+        guard path.hasPrefix("/") else {
+            return false
+        }
+
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "%")
+
+        let scalars = Array(path.unicodeScalars)
+        var index = scalars.startIndex
+        while index < scalars.endIndex {
+            let scalar = scalars[index]
+            if scalar == "%" {
+                let firstHexIndex = scalars.index(after: index)
+                let secondHexIndex = scalars.index(firstHexIndex, offsetBy: 1, limitedBy: scalars.endIndex)
+                guard let secondHexIndex,
+                      secondHexIndex < scalars.endIndex,
+                      scalars[firstHexIndex].isASCIIHexDigit,
+                      scalars[secondHexIndex].isASCIIHexDigit else {
+                    return false
+                }
+
+                index = scalars.index(after: secondHexIndex)
+                continue
+            }
+
+            guard allowed.contains(scalar) else {
+                return false
+            }
+            index = scalars.index(after: index)
+        }
+
+        return true
     }
 
     private func buildURLRequest(
@@ -188,8 +238,15 @@ public struct WebexTransport: Sendable {
     }
 
     private func shouldRetry(response: HTTPResponse, attempt: Int) -> Bool {
-        (response.response.statusCode == 429 || response.response.statusCode >= 500) &&
-            attempt < retryPolicy.maxAttempts
+        guard attempt < retryPolicy.maxAttempts else {
+            return false
+        }
+
+        if response.response.statusCode == 423 {
+            return retryPolicy.retryAfter(from: response.response) != nil
+        }
+
+        return response.response.statusCode == 429 || response.response.statusCode >= 500
     }
 
     private func shouldRetry(error: Error, attempt: Int) -> Bool {
@@ -215,6 +272,14 @@ public struct WebexTransport: Sendable {
     private func responseError(for response: HTTPResponse, accessToken: String) -> WebexSDKError {
         if response.response.statusCode == 429 {
             return .rateLimited(retryAfter: retryPolicy.retryAfter(from: response.response))
+        }
+
+        if response.response.statusCode == 423 {
+            return .locked(
+                retryAfter: retryPolicy.retryAfter(from: response.response),
+                trackingID: trackingID(from: response.response, accessToken: accessToken),
+                message: responseMessage(from: response, accessToken: accessToken)
+            )
         }
 
         return .webexAPI(
@@ -248,6 +313,14 @@ public struct WebexTransport: Sendable {
         }
 
         return nil
+    }
+
+    private func trackingID(from response: HTTPURLResponse, accessToken: String) -> String? {
+        guard let trackingID = trackingID(from: response) else {
+            return nil
+        }
+
+        return redact(trackingID, accessToken: accessToken)
     }
 
     private func redactedNetworkError(_ error: WebexSDKError, accessToken: String?) -> WebexSDKError {
@@ -290,5 +363,13 @@ public struct WebexTransport: Sendable {
         }
 
         return mutableValue as String
+    }
+}
+
+private extension Unicode.Scalar {
+    var isASCIIHexDigit: Bool {
+        ("0"..."9").contains(self) ||
+            ("A"..."F").contains(self) ||
+            ("a"..."f").contains(self)
     }
 }
