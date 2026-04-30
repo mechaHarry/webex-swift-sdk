@@ -60,3 +60,4 @@ same implementation as `client.spaces`.
 ## Examples
 
 - `Examples/WebexClientSmoke`: interactive OAuth smoke test that uses the SDK-owned loopback listener, stores a registry account, exchanges an authorization code, creates `WebexClient`, and calls `people.me()`.
+- `Examples/WebexSpacesListSmoke`: interactive OAuth smoke test that lists Spaces with `client.spaces.listAll(...)` using bounded pagination.
