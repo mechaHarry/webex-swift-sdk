@@ -275,12 +275,14 @@ final class SpacesAPITests: XCTestCase {
         XCTAssertEqual(request.httpMethod, "PUT")
         XCTAssertEqual(request.url?.absoluteString, "https://webexapis.com/v1/rooms/space-id")
         let body = try XCTUnwrap(request.httpBody)
-        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
-        XCTAssertEqual(json?["title"] as? String, "Updated")
-        XCTAssertEqual(json?["description"] as? String, "Updated description")
-        XCTAssertEqual(json?["isLocked"] as? Bool, false)
-        XCTAssertNil(json?["teamId"])
-        XCTAssertNil(json?["creatorId"])
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(Set(json.keys), ["title", "description", "isLocked"])
+        XCTAssertEqual(json["title"] as? String, "Updated")
+        XCTAssertEqual(json["description"] as? String, "Updated description")
+        XCTAssertEqual(json["isLocked"] as? Bool, false)
+        XCTAssertNil(json["isReadOnly"])
+        XCTAssertNil(json["teamId"])
+        XCTAssertNil(json["creatorId"])
     }
 
     func testDeleteSpaceSendsDeleteAndAcceptsNoContent() async throws {

@@ -98,7 +98,6 @@ public struct UpdateSpaceRequest: Encodable, Equatable, Sendable {
     public let isPublic: Bool?
     public let description: String?
     public let isAnnouncementOnly: Bool?
-    public let isReadOnly: Bool?
 
     public init(
         title: String? = nil,
@@ -107,8 +106,7 @@ public struct UpdateSpaceRequest: Encodable, Equatable, Sendable {
         description: String? = nil,
         isLocked: Bool? = nil,
         isPublic: Bool? = nil,
-        isAnnouncementOnly: Bool? = nil,
-        isReadOnly: Bool? = nil
+        isAnnouncementOnly: Bool? = nil
     ) {
         self.title = title
         self.teamID = teamID
@@ -117,7 +115,6 @@ public struct UpdateSpaceRequest: Encodable, Equatable, Sendable {
         self.isPublic = isPublic
         self.description = description
         self.isAnnouncementOnly = isAnnouncementOnly
-        self.isReadOnly = isReadOnly
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -128,7 +125,6 @@ public struct UpdateSpaceRequest: Encodable, Equatable, Sendable {
         case isPublic
         case description
         case isAnnouncementOnly
-        case isReadOnly
     }
 }
 
