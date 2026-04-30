@@ -1,8 +1,9 @@
 import Foundation
 import Security
 
-public actor KeychainWebexStore: WebexCredentialStore, WebexTokenStore, WebexAccountMetadataStore, WebexAccountIndexStore {
+public actor KeychainWebexStore: WebexClientRegistryStore {
     private let service: String
+    private let serviceLock: KeychainWebexStoreServiceLock
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
@@ -12,6 +13,7 @@ public actor KeychainWebexStore: WebexCredentialStore, WebexTokenStore, WebexAcc
 
     public init(service: String) {
         self.service = service
+        self.serviceLock = KeychainWebexStoreLockRegistry.shared.lock(for: service)
         self.encoder = JSONEncoder()
         self.decoder = JSONDecoder()
     }
@@ -62,6 +64,24 @@ public actor KeychainWebexStore: WebexCredentialStore, WebexTokenStore, WebexAcc
             seenAccountIDs.insert(accountID).inserted
         }
         try saveRecord(deduplicatedAccountIDs, account: account(.accountIndex, accountID: nil))
+    }
+
+    public func addAccount(
+        accountID: WebexAccountID,
+        credential: WebexCredentialRecord,
+        metadata: WebexAccountMetadata
+    ) async throws {
+        try Task.checkCancellation()
+        try withServiceLock {
+            try addAccountLocked(accountID: accountID, credential: credential, metadata: metadata)
+        }
+    }
+
+    public func removeAccount(accountID: WebexAccountID) async throws {
+        try Task.checkCancellation()
+        try withServiceLock {
+            try removeAccountLocked(accountID: accountID)
+        }
     }
 
     public func deleteAccountIndex() async throws {
@@ -162,6 +182,110 @@ public actor KeychainWebexStore: WebexCredentialStore, WebexTokenStore, WebexAcc
         }
     }
 
+    private func withServiceLock<T>(_ operation: () throws -> T) throws -> T {
+        try serviceLock.withLock(operation)
+    }
+
+    private func addAccountLocked(
+        accountID: WebexAccountID,
+        credential: WebexCredentialRecord,
+        metadata: WebexAccountMetadata
+    ) throws {
+        let existingAccountIDs = try loadAccountIDsLocked()
+        try WebexAccountDuplicateDetector.validateNoDuplicate(
+            candidateCredential: credential,
+            candidateMetadata: metadata,
+            existingAccountIDs: existingAccountIDs,
+            loadCredential: { accountID in
+                try loadRecord(WebexCredentialRecord.self, account: account(.credential, accountID: accountID))
+            },
+            loadMetadata: { accountID in
+                try loadRecord(WebexAccountMetadata.self, account: account(.metadata, accountID: accountID))
+            }
+        )
+
+        do {
+            try saveRecord(credential, account: account(.credential, accountID: accountID))
+            try saveRecord(metadata, account: account(.metadata, accountID: accountID))
+
+            var accountIDs = existingAccountIDs
+            accountIDs.append(accountID)
+            try saveAccountIDsLocked(accountIDs)
+        } catch {
+            cleanupPartiallyAddedAccountLocked(accountID)
+            throw error
+        }
+    }
+
+    private func removeAccountLocked(accountID: WebexAccountID) throws {
+        let accountIDs = try loadAccountIDsLocked()
+        let remainingAccountIDs = accountIDs.filter { $0 != accountID }
+        if remainingAccountIDs != accountIDs {
+            try saveAccountIDsLocked(remainingAccountIDs)
+        }
+
+        var firstDeleteError: Error?
+        do {
+            try delete(account: account(.credential, accountID: accountID))
+        } catch {
+            firstDeleteError = firstDeleteError ?? error
+        }
+
+        do {
+            try delete(account: account(.token, accountID: accountID))
+        } catch {
+            firstDeleteError = firstDeleteError ?? error
+        }
+
+        do {
+            try delete(account: account(.metadata, accountID: accountID))
+        } catch {
+            firstDeleteError = firstDeleteError ?? error
+        }
+
+        if let firstDeleteError {
+            throw firstDeleteError
+        }
+    }
+
+    private func cleanupPartiallyAddedAccountLocked(_ accountID: WebexAccountID) {
+        do {
+            let accountIDs = try loadAccountIDsLocked()
+            let remainingAccountIDs = accountIDs.filter { $0 != accountID }
+            if remainingAccountIDs != accountIDs {
+                try saveAccountIDsLocked(remainingAccountIDs)
+            }
+        } catch {
+        }
+
+        do {
+            try delete(account: account(.credential, accountID: accountID))
+        } catch {
+        }
+
+        do {
+            try delete(account: account(.token, accountID: accountID))
+        } catch {
+        }
+
+        do {
+            try delete(account: account(.metadata, accountID: accountID))
+        } catch {
+        }
+    }
+
+    private func loadAccountIDsLocked() throws -> [WebexAccountID] {
+        try loadRecord([WebexAccountID].self, account: account(.accountIndex, accountID: nil)) ?? []
+    }
+
+    private func saveAccountIDsLocked(_ accountIDs: [WebexAccountID]) throws {
+        var seenAccountIDs = Set<WebexAccountID>()
+        let deduplicatedAccountIDs = accountIDs.filter { accountID in
+            seenAccountIDs.insert(accountID).inserted
+        }
+        try saveRecord(deduplicatedAccountIDs, account: account(.accountIndex, accountID: nil))
+    }
+
     private func account(_ kind: RecordKind, accountID: WebexAccountID?) -> String {
         switch kind {
         case .credential, .token, .metadata:
@@ -204,6 +328,42 @@ public actor KeychainWebexStore: WebexCredentialStore, WebexTokenStore, WebexAcc
         case token
         case metadata
         case accountIndex = "account-index"
+    }
+}
+
+final class KeychainWebexStoreServiceLock {
+    private let lock = NSLock()
+
+    func withLock<T>(_ operation: () throws -> T) throws -> T {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+
+        try Task.checkCancellation()
+        return try operation()
+    }
+}
+
+private final class KeychainWebexStoreLockRegistry {
+    static let shared = KeychainWebexStoreLockRegistry()
+
+    private let lock = NSLock()
+    private var locks: [String: KeychainWebexStoreServiceLock] = [:]
+
+    func lock(for service: String) -> KeychainWebexStoreServiceLock {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+
+        if let existingLock = locks[service] {
+            return existingLock
+        }
+
+        let serviceLock = KeychainWebexStoreServiceLock()
+        locks[service] = serviceLock
+        return serviceLock
     }
 }
 

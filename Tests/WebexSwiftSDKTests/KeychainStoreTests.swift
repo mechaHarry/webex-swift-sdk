@@ -2,6 +2,26 @@ import Security
 import XCTest
 @testable import WebexSwiftSDK
 
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValue = false
+
+    func setTrue() {
+        lock.lock()
+        storedValue = true
+        lock.unlock()
+    }
+
+    func value() -> Bool {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+
+        return storedValue
+    }
+}
+
 final class KeychainStoreServiceTests: XCTestCase {
     func testDefaultServiceUsesHostBundleIdentifier() {
         let service = KeychainWebexStoreService.defaultService(
@@ -67,6 +87,39 @@ final class KeychainStoreServiceTests: XCTestCase {
         let safeCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_"))
 
         XCTAssertTrue(service.unicodeScalars.allSatisfy { safeCharacters.contains($0) })
+    }
+
+    func testServiceLockDoesNotRunOperationAfterWaitingTaskIsCancelled() async throws {
+        let serviceLock = KeychainWebexStoreServiceLock()
+        let locked = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let operationRan = LockedFlag()
+        let holder = Task.detached {
+            try serviceLock.withLock {
+                locked.signal()
+                release.wait()
+            }
+        }
+        XCTAssertEqual(locked.wait(timeout: .now() + 2), .success)
+
+        let waiter = Task.detached { () -> Bool in
+            do {
+                try serviceLock.withLock {
+                    operationRan.setTrue()
+                }
+                return true
+            } catch is CancellationError {
+                return false
+            }
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        waiter.cancel()
+        release.signal()
+
+        try await holder.value
+        let completedOperation = try await waiter.value
+        XCTAssertFalse(completedOperation)
+        XCTAssertFalse(operationRan.value())
     }
 }
 

@@ -1,4 +1,4 @@
-public actor InMemoryWebexStore: WebexCredentialStore, WebexTokenStore, WebexAccountMetadataStore, WebexAccountIndexStore {
+public actor InMemoryWebexStore: WebexClientRegistryStore {
     private var credentials: [WebexAccountID: WebexCredentialRecord]
     private var tokenRecords: [WebexAccountID: WebexTokenRecord]
     private var metadataRecords: [WebexAccountID: WebexAccountMetadata]
@@ -61,5 +61,40 @@ public actor InMemoryWebexStore: WebexCredentialStore, WebexTokenStore, WebexAcc
         self.accountIDs = accountIDs.filter { accountID in
             seenAccountIDs.insert(accountID).inserted
         }
+    }
+
+    public func addAccount(
+        accountID: WebexAccountID,
+        credential: WebexCredentialRecord,
+        metadata: WebexAccountMetadata
+    ) async throws {
+        try Task.checkCancellation()
+        try WebexAccountDuplicateDetector.validateNoDuplicate(
+            candidateCredential: credential,
+            candidateMetadata: metadata,
+            existingAccountIDs: accountIDs,
+            loadCredential: { credentials[$0] },
+            loadMetadata: { metadataRecords[$0] }
+        )
+
+        credentials[accountID] = credential
+        metadataRecords[accountID] = metadata
+        saveAccountID(accountID)
+    }
+
+    public func removeAccount(accountID: WebexAccountID) async throws {
+        try Task.checkCancellation()
+        accountIDs.removeAll { $0 == accountID }
+        credentials[accountID] = nil
+        tokenRecords[accountID] = nil
+        metadataRecords[accountID] = nil
+    }
+
+    private func saveAccountID(_ accountID: WebexAccountID) {
+        guard !accountIDs.contains(accountID) else {
+            return
+        }
+
+        accountIDs.append(accountID)
     }
 }
