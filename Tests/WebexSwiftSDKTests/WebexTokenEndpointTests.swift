@@ -110,6 +110,25 @@ final class WebexTokenEndpointTests: XCTestCase {
         }
     }
 
+    func testURLSessionHTTPClientPreservesCancellationError() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CancellationURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            session.invalidateAndCancel()
+        }
+
+        let request = URLRequest(url: URL(string: "https://example.com/cancel")!)
+
+        do {
+            _ = try await URLSessionHTTPClient(session: session).send(request)
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+    }
+
     func testTokenResponseDecodesWebexSnakeCasePayload() throws {
         let json = """
         {
@@ -262,6 +281,22 @@ private final class NonHTTPURLProtocol: URLProtocol {
 
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+private final class CancellationURLProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        client?.urlProtocol(self, didFailWithError: CancellationError())
     }
 
     override func stopLoading() {}

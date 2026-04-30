@@ -29,10 +29,29 @@ public struct URLSessionHTTPClient: HTTPClient {
             }
 
             return HTTPResponse(data: data, response: httpResponse)
+        } catch let error as CancellationError {
+            throw error
         } catch let error as WebexSDKError {
             throw error
         } catch {
+            if Self.isCancellation(error) {
+                throw CancellationError()
+            }
+
             throw WebexSDKError.network("URLSession request failed: \(Redactor.redactSecrets(error.localizedDescription))")
         }
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+
+        if let urlError = error as? URLError, urlError.code == .cancelled {
+            return true
+        }
+
+        let nsError = error as NSError
+        return nsError.domain == "Swift.CancellationError"
     }
 }
