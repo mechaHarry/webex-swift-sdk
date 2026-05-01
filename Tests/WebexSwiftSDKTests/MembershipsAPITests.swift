@@ -309,6 +309,37 @@ final class MembershipsAPITests: XCTestCase {
         XCTAssertTrue(requests.isEmpty)
     }
 
+    func testWebexClientExposesMemberships() async throws {
+        let accountID = WebexAccountID()
+        let store = InMemoryWebexStore()
+        let httpClient = MockMembershipsHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            body: #"{"items":[{"id":"membership-from-client"}]}"#
+        ))
+        let client = WebexClient(
+            accountID: accountID,
+            configuration: WebexIntegrationConfiguration(
+                clientID: "client",
+                clientSecret: "secret",
+                redirectURI: URL(string: "myapp://oauth/webex")!,
+                scopes: ["spark:memberships_read"]
+            ),
+            tokenStore: store,
+            httpClient: httpClient,
+            initialAccessToken: AccessTokenState(
+                value: "client-token",
+                expiresAt: Date(timeIntervalSince1970: 1_000),
+                tokenType: "Bearer"
+            ),
+            clock: { Date(timeIntervalSince1970: 0) }
+        )
+
+        let page = try await client.memberships.list()
+
+        XCTAssertEqual(page.items.map(\.id), ["membership-from-client"])
+    }
+
     private func iso8601(_ date: Date?) -> String? {
         guard let date else {
             return nil
