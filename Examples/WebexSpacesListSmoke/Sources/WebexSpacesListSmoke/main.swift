@@ -10,7 +10,7 @@ struct WebexSpacesListSmoke {
         } catch is CancellationError {
             fputs("Cancelled.\n", stderr)
             Foundation.exit(130)
-        } catch WebexSDKError.network(let message) where message == "Spaces pagination page cap exceeded" {
+        } catch WebexSDKError.network(let message) where message == "Spaces smoke page cap exceeded" {
             fputs("Spaces list smoke failed: \(message).\n", stderr)
             fputs("Increase WEBEX_SPACES_MAX_PAGES or narrow the listing with WEBEX_SPACES_TYPE / WEBEX_SPACES_TEAM_ID.\n", stderr)
             Foundation.exit(1)
@@ -37,8 +37,7 @@ struct WebexSpacesListSmoke {
             openAuthorizationURL: { authorizationURL in
                 print("")
                 print("Opening Webex authorization URL in your default browser.")
-                print("If the browser does not open, paste this URL manually:")
-                print(authorizationURL.absoluteString)
+                print("If the browser does not open, verify your redirect URI matches the README and rerun after fixing browser defaults.")
                 print("")
                 guard NSWorkspace.shared.open(authorizationURL) else {
                     throw SmokeError.failedToOpenAuthorizationURL
@@ -51,8 +50,9 @@ struct WebexSpacesListSmoke {
         print("")
         print("Listing Webex Spaces with page size \(listOptions.pageSize), max pages \(listOptions.maxPages)")
 
-        let spaces = try await authorized.client.spaces.listAll(
-            query: listOptions.query,
+        let spaces = try await collectSpaces(
+            client: authorized.client,
+            params: listOptions.params,
             maxPages: listOptions.maxPages
         )
 
@@ -124,12 +124,34 @@ struct WebexSpacesListSmoke {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.string(from: date)
     }
+
+    private static func collectSpaces(
+        client: WebexClient,
+        params: ListSpacesParams,
+        maxPages: Int
+    ) async throws -> [WebexSpace] {
+        var page = try await client.spaces.list(params: params)
+        var spaces = page.items
+        var pagesFetched = 1
+
+        while let nextPage = page.nextPage {
+            guard pagesFetched < maxPages else {
+                throw WebexSDKError.network("Spaces smoke page cap exceeded")
+            }
+
+            page = try await client.spaces.list(nextPage: nextPage)
+            spaces.append(contentsOf: page.items)
+            pagesFetched += 1
+        }
+
+        return spaces
+    }
 }
 
 struct ListOptions {
     let pageSize: Int
     let maxPages: Int
-    let query: ListSpacesQuery
+    let params: ListSpacesParams
 
     init(environment: [String: String]) throws {
         self.pageSize = try Self.integer(
@@ -146,7 +168,7 @@ struct ListOptions {
             maximum: 10_000,
             environment: environment
         )
-        self.query = ListSpacesQuery(
+        self.params = ListSpacesParams(
             teamID: Self.trimmedOptional(environment["WEBEX_SPACES_TEAM_ID"]),
             type: try Self.spaceType(environment["WEBEX_SPACES_TYPE"]),
             sortBy: try Self.sort(environment["WEBEX_SPACES_SORT_BY"]),

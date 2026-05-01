@@ -31,8 +31,7 @@ struct WebexClientSmoke {
             openAuthorizationURL: { authorizationURL in
                 print("")
                 print("Opening Webex authorization URL in your default browser.")
-                print("If the browser does not open, paste this URL manually:")
-                print(authorizationURL.absoluteString)
+                print("If the browser does not open, verify your redirect URI matches the README and rerun after fixing browser defaults.")
                 print("")
                 guard NSWorkspace.shared.open(authorizationURL) else {
                     throw SmokeError.failedToOpenAuthorizationURL
@@ -44,7 +43,14 @@ struct WebexClientSmoke {
         print("Saved refresh token record. Access token expires at: \(authorized.accessTokenExpiresAt)")
 
         let person = try await authorized.client.people.me()
-        try await store.saveMetadata(person.metadata(verifiedAt: Date()), for: authorized.account.id)
+        let metadata = WebexAccountMetadata(
+            webexUserID: person.id,
+            email: person.emails.first,
+            displayName: person.displayName,
+            organizationID: person.orgID,
+            lastVerifiedAt: Date()
+        )
+        try await store.saveMetadata(metadata, for: authorized.account.id)
 
         print("")
         print("people.me()")
@@ -52,7 +58,7 @@ struct WebexClientSmoke {
         print("displayName: \(person.displayName ?? "(nil)")")
         print("emails: \(person.emails.joined(separator: ", "))")
         print("orgID: \(person.orgID ?? "(nil)")")
-        print("created: \(person.created ?? "(nil)")")
+        print("created: \(iso8601(person.created))")
     }
 
     private static func configurationFromEnvironment() throws -> WebexIntegrationConfiguration {
@@ -87,6 +93,16 @@ struct WebexClientSmoke {
         }
 
         return value
+    }
+
+    private static func iso8601(_ date: Date?) -> String {
+        guard let date else {
+            return "(nil)"
+        }
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: date)
     }
 }
 

@@ -10,7 +10,7 @@ struct WebexMembershipsListSmoke {
         } catch is CancellationError {
             fputs("Cancelled.\n", stderr)
             Foundation.exit(130)
-        } catch WebexSDKError.network(let message) where message == "Memberships pagination page cap exceeded" {
+        } catch WebexSDKError.network(let message) where message == "Memberships smoke page cap exceeded" {
             fputs("Memberships list smoke failed: \(message).\n", stderr)
             fputs("Increase WEBEX_MEMBERSHIPS_MAX_PAGES or lower WEBEX_MEMBERSHIPS_PAGE_SIZE.\n", stderr)
             Foundation.exit(1)
@@ -49,8 +49,9 @@ struct WebexMembershipsListSmoke {
         print("")
         print("Listing Webex Memberships for room \(listOptions.roomID)")
 
-        let memberships = try await authorized.client.memberships.listAll(
-            query: listOptions.query,
+        let memberships = try await collectMemberships(
+            client: authorized.client,
+            params: listOptions.params,
             maxPages: listOptions.maxPages
         )
 
@@ -118,6 +119,28 @@ struct WebexMembershipsListSmoke {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.string(from: date)
     }
+
+    private static func collectMemberships(
+        client: WebexClient,
+        params: ListMembershipsParams,
+        maxPages: Int
+    ) async throws -> [WebexMembership] {
+        var page = try await client.memberships.list(params: params)
+        var memberships = page.items
+        var pagesFetched = 1
+
+        while let nextPage = page.nextPage {
+            guard pagesFetched < maxPages else {
+                throw WebexSDKError.network("Memberships smoke page cap exceeded")
+            }
+
+            page = try await client.memberships.list(nextPage: nextPage)
+            memberships.append(contentsOf: page.items)
+            pagesFetched += 1
+        }
+
+        return memberships
+    }
 }
 
 private func requiredEnvironment(
@@ -136,7 +159,7 @@ struct MembershipListOptions {
     let roomID: String
     let pageSize: Int
     let maxPages: Int
-    let query: ListMembershipsQuery
+    let params: ListMembershipsParams
 
     init(environment: [String: String]) throws {
         self.roomID = try requiredEnvironment("WEBEX_ROOM_ID", environment: environment)
@@ -154,7 +177,7 @@ struct MembershipListOptions {
             maximum: 10_000,
             environment: environment
         )
-        self.query = ListMembershipsQuery(roomID: roomID, max: pageSize)
+        self.params = ListMembershipsParams(roomID: roomID, max: pageSize)
     }
 
     private static func integer(
