@@ -46,6 +46,22 @@ Breaking renames:
 No backwards compatibility aliases are needed because the SDK API is still under
 active design.
 
+Also remove `WebexPerson.metadata(verifiedAt:)`. `WebexPerson` is Webex REST
+data, while `WebexAccountMetadata` is local SDK account bookkeeping. Apps and
+examples that want to label a stored account should construct metadata
+explicitly after calling `people.me()`:
+
+```swift
+let person = try await client.people.me()
+let metadata = WebexAccountMetadata(
+    webexUserID: person.id,
+    email: person.emails.first,
+    displayName: person.displayName,
+    organizationID: person.orgID,
+    lastVerifiedAt: Date()
+)
+```
+
 ## Pagination Shape
 
 Webex pagination is not returned in JSON. It is returned in the HTTP `Link`
@@ -140,6 +156,10 @@ Date fields should decode with the existing Webex date decoder. Unknown enum
 values should be preserved instead of failing decoding, using the same
 unknown-preserving style already used for spaces.
 
+Do not add model convenience methods that map API data into registry/account
+state. That mapping is app-owned because different apps may prefer different
+email selection, identity display, or metadata refresh policy.
+
 `WebexPersonListPage` should expose:
 
 - `items: [WebexPerson]`
@@ -194,6 +214,9 @@ Add a People read smoke example:
 
 - It should authenticate through the existing registry/loopback flow.
 - It should call `people.me()`.
+- It should save registry metadata by constructing `WebexAccountMetadata`
+  explicitly from the `people.me()` response, not through a `WebexPerson`
+  convenience method.
 - It should call `people.get(personID:)` for the authenticated person.
 - It should call `people.list(params:)` using either a user-supplied
   comma-separated `WEBEX_PEOPLE_IDS` value or the authenticated user's ID.
@@ -214,6 +237,9 @@ Every feature must have focused tests:
 - People `list(nextPage:)` follows only a parsed `WebexPageLink`.
 - Existing Spaces and Memberships tests are updated from `Query`/`listAll` to
   `Params`/explicit `nextPage` pagination.
+- Existing tests and examples are updated to remove
+  `WebexPerson.metadata(verifiedAt:)` and construct `WebexAccountMetadata`
+  directly when registry metadata is needed.
 - README and smoke example API names compile.
 
 Run at minimum:
