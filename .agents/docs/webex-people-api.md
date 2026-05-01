@@ -43,8 +43,7 @@ token lacks permission.
 - `excludeStatus`
 
 `id` is a comma-separated string. Webex documents support for up to 85 IDs. The
-SDK passes it directly and does not add a custom `personIDs` collection
-abstraction.
+SDK passes it directly and does not add a custom collection abstraction.
 
 ## Pagination
 
