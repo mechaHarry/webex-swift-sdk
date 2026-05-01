@@ -38,7 +38,7 @@ WEBEX_MEMBERSHIPS_PAGE_SIZE="100"
 WEBEX_MEMBERSHIPS_MAX_PAGES="1000"
 ```
 
-If the smoke reports `Memberships pagination page cap exceeded`, increase
+If the smoke reports `Memberships smoke page cap exceeded`, increase
 `WEBEX_MEMBERSHIPS_MAX_PAGES` or lower `WEBEX_MEMBERSHIPS_PAGE_SIZE`.
 
 If your Webex integration uses a different registered loopback URI, override it with:

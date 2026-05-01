@@ -47,7 +47,7 @@ WEBEX_SPACES_SORT_BY="lastactivity"
 WEBEX_SPACES_TEAM_ID="your-team-id"
 ```
 
-If the smoke reports `Spaces pagination page cap exceeded`, increase
+If the smoke reports `Spaces smoke page cap exceeded`, increase
 `WEBEX_SPACES_MAX_PAGES` or narrow the listing with `WEBEX_SPACES_TYPE` or
 `WEBEX_SPACES_TEAM_ID`.
 

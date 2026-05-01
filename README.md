@@ -102,4 +102,4 @@ print(people.items.first?.displayName ?? me.id)
 - `Examples/WebexClientSmoke`: interactive OAuth smoke test that uses the SDK-owned loopback listener, stores a registry account, exchanges an authorization code, creates `WebexClient`, and calls `people.me()`.
 - `Examples/WebexPeopleReadSmoke`: interactive OAuth smoke test that reads the current person and performs a bounded People list lookup.
 - `Examples/WebexSpacesListSmoke`: interactive OAuth smoke test that lists Spaces with explicit bounded pagination.
-- `Examples/WebexMembershipsListSmoke`: interactive OAuth smoke test that lists one bounded Memberships page for `WEBEX_ROOM_ID`.
+- `Examples/WebexMembershipsListSmoke`: interactive OAuth smoke test that lists Memberships for `WEBEX_ROOM_ID` with explicit bounded pagination.
