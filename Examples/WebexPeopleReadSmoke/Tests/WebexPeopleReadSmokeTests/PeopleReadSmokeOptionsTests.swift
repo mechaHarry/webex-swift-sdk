@@ -3,20 +3,26 @@ import WebexSwiftSDK
 @testable import WebexPeopleReadSmoke
 
 final class PeopleReadSmokeOptionsTests: XCTestCase {
-    func testPeopleIDsTrimWhitespace() {
-        let options = PeopleReadOptions(environment: [
-            "WEBEX_PEOPLE_IDS": "  person-1,person-2 \n"
-        ])
+    func testDisplayNameDefaultsToHarrison() {
+        let options = PeopleReadOptions(environment: [:])
 
-        XCTAssertEqual(options.peopleIDs, "person-1,person-2")
+        XCTAssertEqual(options.displayName, "Harrison")
     }
 
-    func testEmptyPeopleIDsBecomeNil() {
+    func testDisplayNameTrimsWhitespace() {
         let options = PeopleReadOptions(environment: [
-            "WEBEX_PEOPLE_IDS": " \n\t "
+            "WEBEX_PEOPLE_DISPLAY_NAME": "  Harrison \n"
         ])
 
-        XCTAssertNil(options.peopleIDs)
+        XCTAssertEqual(options.displayName, "Harrison")
+    }
+
+    func testEmptyDisplayNameFallsBackToHarrison() {
+        let options = PeopleReadOptions(environment: [
+            "WEBEX_PEOPLE_DISPLAY_NAME": " \n\t "
+        ])
+
+        XCTAssertEqual(options.displayName, "Harrison")
     }
 
     func testInvalidRedirectURIErrorDescriptionDoesNotExposeURL() throws {

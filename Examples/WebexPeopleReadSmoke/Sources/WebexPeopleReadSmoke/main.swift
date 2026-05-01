@@ -55,15 +55,15 @@ struct WebexPeopleReadSmoke {
         print("people.get(personID: me.id)")
         printPerson(fetched)
 
-        let ids = options.peopleIDs ?? me.id
         let page = try await authorized.client.people.list(params: .init(
-            id: ids,
+            displayName: options.displayName,
             max: 25,
             excludeStatus: true
         ))
 
         print("")
         print("people.list(params:)")
+        print("displayName: \(options.displayName)")
         print("notFoundIDs: \(optionalList(page.notFoundIDs))")
         print("nextPageExists: \(page.nextPage != nil)")
         for (index, person) in page.items.enumerated() {
@@ -135,10 +135,10 @@ struct WebexPeopleReadSmoke {
 }
 
 struct PeopleReadOptions {
-    let peopleIDs: String?
+    let displayName: String
 
     init(environment: [String: String]) {
-        self.peopleIDs = Self.trimmedOptional(environment["WEBEX_PEOPLE_IDS"])
+        self.displayName = Self.trimmedOptional(environment["WEBEX_PEOPLE_DISPLAY_NAME"]) ?? "Harrison"
     }
 
     private static func trimmedOptional(_ value: String?) -> String? {
