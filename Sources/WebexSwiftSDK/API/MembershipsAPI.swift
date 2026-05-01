@@ -46,6 +46,52 @@ public struct WebexMembershipListPage: Equatable, Sendable {
     }
 }
 
+public struct CreateMembershipRequest: Encodable, Equatable, Sendable {
+    public let roomID: String
+    public let personID: String?
+    public let personEmail: String?
+    public let isModerator: Bool?
+
+    public init(roomID: String, personID: String, isModerator: Bool? = nil) {
+        self.roomID = roomID
+        self.personID = personID
+        self.personEmail = nil
+        self.isModerator = isModerator
+    }
+
+    public init(roomID: String, personEmail: String, isModerator: Bool? = nil) {
+        self.roomID = roomID
+        self.personID = nil
+        self.personEmail = personEmail
+        self.isModerator = isModerator
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case roomID = "roomId"
+        case personID = "personId"
+        case personEmail
+        case isModerator
+    }
+}
+
+public struct UpdateMembershipRequest: Encodable, Equatable, Sendable {
+    public let isModerator: Bool?
+    public let isRoomHidden: Bool?
+
+    public init(
+        isModerator: Bool? = nil,
+        isRoomHidden: Bool? = nil
+    ) {
+        self.isModerator = isModerator
+        self.isRoomHidden = isRoomHidden
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case isModerator
+        case isRoomHidden
+    }
+}
+
 public struct MembershipsAPI: Sendable {
     private let transport: WebexTransport
 
@@ -96,6 +142,46 @@ public struct MembershipsAPI: Sendable {
         return memberships
     }
 
+    public func create(_ request: CreateMembershipRequest) async throws -> WebexMembership {
+        let body = try JSONEncoder().encode(request)
+        let data = try await transport.send(WebexRequest(
+            method: "POST",
+            path: "/v1/memberships",
+            body: body
+        ))
+        return try JSONDecoder().decode(WebexMembership.self, from: data)
+    }
+
+    public func get(membershipID: String) async throws -> WebexMembership {
+        let data = try await transport.send(WebexRequest(
+            path: try membershipPath(membershipID),
+            isPathPercentEncoded: true
+        ))
+        return try JSONDecoder().decode(WebexMembership.self, from: data)
+    }
+
+    public func update(
+        membershipID: String,
+        _ request: UpdateMembershipRequest
+    ) async throws -> WebexMembership {
+        let body = try JSONEncoder().encode(request)
+        let data = try await transport.send(WebexRequest(
+            method: "PUT",
+            path: try membershipPath(membershipID),
+            isPathPercentEncoded: true,
+            body: body
+        ))
+        return try JSONDecoder().decode(WebexMembership.self, from: data)
+    }
+
+    public func delete(membershipID: String) async throws {
+        _ = try await transport.send(WebexRequest(
+            method: "DELETE",
+            path: try membershipPath(membershipID),
+            isPathPercentEncoded: true
+        ))
+    }
+
     private func list(request: WebexRequest) async throws -> WebexMembershipListPage {
         let response = try await transport.sendResponse(request)
         let envelope = try JSONDecoder().decode(WebexMembershipListEnvelope.self, from: response.data)
@@ -119,6 +205,23 @@ public struct MembershipsAPI: Sendable {
         }
 
         return "\(request.method.uppercased()) \(normalizedPath)?\(queryKey)"
+    }
+
+    private func membershipPath(_ membershipID: String) throws -> String {
+        let trimmedID = membershipID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty else {
+            throw WebexSDKError.network("Invalid Webex membership ID")
+        }
+
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/?#%")
+
+        guard let encodedID = trimmedID.addingPercentEncoding(withAllowedCharacters: allowed),
+              !encodedID.isEmpty else {
+            throw WebexSDKError.network("Invalid Webex membership ID")
+        }
+
+        return "/v1/memberships/\(encodedID)"
     }
 }
 

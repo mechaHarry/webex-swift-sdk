@@ -185,6 +185,130 @@ final class MembershipsAPITests: XCTestCase {
         XCTAssertTrue(requests.isEmpty)
     }
 
+    func testCreateMembershipWithPersonEmailPostsJSONAndDecodesMembership() async throws {
+        let httpClient = MockMembershipsHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            body: #"{"id":"created-membership","roomId":"room-id","personEmail":"person@example.com","isModerator":true}"#
+        ))
+        let api = makeAPI(httpClient: httpClient)
+
+        let membership = try await api.create(CreateMembershipRequest(
+            roomID: "room-id",
+            personEmail: "person@example.com",
+            isModerator: true
+        ))
+
+        XCTAssertEqual(membership.id, "created-membership")
+        XCTAssertEqual(membership.personEmail, "person@example.com")
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.absoluteString, "https://webexapis.com/v1/memberships")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(Set(json.keys), ["roomId", "personEmail", "isModerator"])
+        XCTAssertEqual(json["roomId"] as? String, "room-id")
+        XCTAssertEqual(json["personEmail"] as? String, "person@example.com")
+        XCTAssertEqual(json["isModerator"] as? Bool, true)
+        XCTAssertNil(json["personId"])
+    }
+
+    func testCreateMembershipWithPersonIDPostsExactlyOneIdentity() async throws {
+        let httpClient = MockMembershipsHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            body: #"{"id":"created-membership","roomId":"room-id","personId":"person-id"}"#
+        ))
+        let api = makeAPI(httpClient: httpClient)
+
+        _ = try await api.create(CreateMembershipRequest(roomID: "room-id", personID: "person-id"))
+
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(Set(json.keys), ["roomId", "personId"])
+        XCTAssertEqual(json["personId"] as? String, "person-id")
+        XCTAssertNil(json["personEmail"])
+    }
+
+    func testGetMembershipPercentEncodesPathSegment() async throws {
+        let httpClient = MockMembershipsHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            body: #"{"id":"membership/id+1"}"#
+        ))
+        let api = makeAPI(httpClient: httpClient)
+
+        let membership = try await api.get(membershipID: "membership/id+1")
+
+        XCTAssertEqual(membership.id, "membership/id+1")
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.url?.absoluteString, "https://webexapis.com/v1/memberships/membership%2Fid+1")
+    }
+
+    func testUpdateMembershipPutsOnlyMutableFields() async throws {
+        let httpClient = MockMembershipsHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            body: #"{"id":"membership-id","isModerator":true,"isRoomHidden":false}"#
+        ))
+        let api = makeAPI(httpClient: httpClient)
+
+        let membership = try await api.update(membershipID: "membership-id", UpdateMembershipRequest(
+            isModerator: true,
+            isRoomHidden: false
+        ))
+
+        XCTAssertEqual(membership.isModerator, true)
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.httpMethod, "PUT")
+        XCTAssertEqual(request.url?.absoluteString, "https://webexapis.com/v1/memberships/membership-id")
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(Set(json.keys), ["isModerator", "isRoomHidden"])
+        XCTAssertEqual(json["isModerator"] as? Bool, true)
+        XCTAssertEqual(json["isRoomHidden"] as? Bool, false)
+        XCTAssertNil(json["roomId"])
+        XCTAssertNil(json["personEmail"])
+        XCTAssertNil(json["isMonitor"])
+    }
+
+    func testDeleteMembershipSendsDeleteAndAcceptsNoContent() async throws {
+        let httpClient = MockMembershipsHTTPClient()
+        await httpClient.enqueue(response: httpResponse(statusCode: 204, body: ""))
+        let api = makeAPI(httpClient: httpClient)
+
+        try await api.delete(membershipID: "membership-id")
+
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.httpMethod, "DELETE")
+        XCTAssertEqual(request.url?.absoluteString, "https://webexapis.com/v1/memberships/membership-id")
+    }
+
+    func testMembershipIDValidationFailsBeforeHTTPWithoutLeakingID() async throws {
+        let httpClient = MockMembershipsHTTPClient()
+        let api = makeAPI(httpClient: httpClient)
+
+        do {
+            _ = try await api.get(membershipID: "   ")
+            XCTFail("Expected invalid membership ID")
+        } catch WebexSDKError.network(let message) {
+            XCTAssertEqual(message, "Invalid Webex membership ID")
+        } catch {
+            XCTFail("Expected network error, got \(error)")
+        }
+
+        let requests = await httpClient.recordedRequests()
+        XCTAssertTrue(requests.isEmpty)
+    }
+
     private func iso8601(_ date: Date?) -> String? {
         guard let date else {
             return nil
