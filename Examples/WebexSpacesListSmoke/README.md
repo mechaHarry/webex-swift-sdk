@@ -11,7 +11,7 @@ This example:
 - exchanges the authorization code for tokens
 - stores the refresh-token record in the registry store
 - creates `WebexClient` with the initial access token in memory
-- calls `spaces.listAll(...)` with a bounded page cap
+- calls `spaces.list(params:)` and follows `page.nextPage` with a bounded page cap
 - prints returned Spaces metadata without printing tokens, authorization codes, or client secrets
 
 ## Run
@@ -47,7 +47,7 @@ WEBEX_SPACES_SORT_BY="lastactivity"
 WEBEX_SPACES_TEAM_ID="your-team-id"
 ```
 
-If the smoke reports `Spaces pagination page cap exceeded`, increase
+If the smoke reports `Spaces smoke page cap exceeded`, increase
 `WEBEX_SPACES_MAX_PAGES` or narrow the listing with `WEBEX_SPACES_TYPE` or
 `WEBEX_SPACES_TEAM_ID`.
 

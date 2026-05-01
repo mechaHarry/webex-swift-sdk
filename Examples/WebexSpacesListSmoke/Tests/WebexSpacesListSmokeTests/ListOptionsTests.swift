@@ -7,6 +7,6 @@ final class ListOptionsTests: XCTestCase {
 
         XCTAssertEqual(options.pageSize, 100)
         XCTAssertEqual(options.maxPages, 1_000)
-        XCTAssertEqual(options.query.max, 100)
+        XCTAssertEqual(options.params.max, 100)
     }
 }

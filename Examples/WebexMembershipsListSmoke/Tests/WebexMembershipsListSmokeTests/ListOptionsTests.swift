@@ -11,8 +11,8 @@ final class ListOptionsTests: XCTestCase {
         XCTAssertEqual(options.roomID, "room-id")
         XCTAssertEqual(options.pageSize, 100)
         XCTAssertEqual(options.maxPages, 1_000)
-        XCTAssertEqual(options.query.roomID, "room-id")
-        XCTAssertEqual(options.query.max, 100)
+        XCTAssertEqual(options.params.roomID, "room-id")
+        XCTAssertEqual(options.params.max, 100)
     }
 
     func testPageSizeAndMaxPagesOverridesAreApplied() throws {
@@ -24,7 +24,7 @@ final class ListOptionsTests: XCTestCase {
 
         XCTAssertEqual(options.pageSize, 25)
         XCTAssertEqual(options.maxPages, 3)
-        XCTAssertEqual(options.query.max, 25)
+        XCTAssertEqual(options.params.max, 25)
     }
 
     func testInvalidPageSizeAndMaxPagesThrow() {

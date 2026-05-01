@@ -54,7 +54,7 @@ final class MembershipsAPITests: XCTestCase {
         }
     }
 
-    func testListMembershipsSendsTypedQueryAndDecodesPage() async throws {
+    func testListMembershipsSendsParamsAndDecodesPage() async throws {
         let httpClient = MockMembershipsHTTPClient()
         await httpClient.enqueue(response: httpResponse(
             statusCode: 200,
@@ -63,7 +63,7 @@ final class MembershipsAPITests: XCTestCase {
         ))
         let api = makeAPI(httpClient: httpClient)
 
-        let page = try await api.list(query: ListMembershipsQuery(
+        let page = try await api.list(params: ListMembershipsParams(
             roomID: "room-1",
             personID: "person-1",
             personEmail: "user@example.com",
@@ -82,7 +82,7 @@ final class MembershipsAPITests: XCTestCase {
         XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer memberships-token")
     }
 
-    func testListAllMembershipsFollowsNextLinksThroughEmptyPages() async throws {
+    func testListMembershipsNextPageUsesParsedWebexPageLink() async throws {
         let httpClient = MockMembershipsHTTPClient()
         await httpClient.enqueue(response: httpResponse(
             statusCode: 200,
@@ -91,98 +91,21 @@ final class MembershipsAPITests: XCTestCase {
         ))
         await httpClient.enqueue(response: httpResponse(
             statusCode: 200,
-            headers: ["Link": #"<https://webexapis.com/v1/memberships?cursor=third>; rel="next""#],
-            body: #"{"items":[]}"#
-        ))
-        await httpClient.enqueue(response: httpResponse(
-            statusCode: 200,
-            body: #"{"items":[{"id":"membership-3"}]}"#
+            body: #"{"items":[{"id":"membership-2"}]}"#
         ))
         let api = makeAPI(httpClient: httpClient)
 
-        let memberships = try await api.listAll(query: .init(max: 2))
+        let firstPage = try await api.list(params: .init(roomID: "room-1", max: 10))
+        let nextPage = try XCTUnwrap(firstPage.nextPage)
+        let secondPage = try await api.list(nextPage: nextPage)
 
-        XCTAssertEqual(memberships.map(\.id), ["membership-1", "membership-3"])
+        XCTAssertEqual(firstPage.items.map(\.id), ["membership-1"])
+        XCTAssertEqual(secondPage.items.map(\.id), ["membership-2"])
         let requests = await httpClient.recordedRequests()
         XCTAssertEqual(requests.map { $0.url?.absoluteString }, [
-            "https://webexapis.com/v1/memberships?max=2",
-            "https://webexapis.com/v1/memberships?cursor=second",
-            "https://webexapis.com/v1/memberships?cursor=third"
+            "https://webexapis.com/v1/memberships?roomId=room-1&max=10",
+            "https://webexapis.com/v1/memberships?cursor=second"
         ])
-    }
-
-    func testListAllMembershipsRejectsPageCapWithoutLeakingURLOrToken() async throws {
-        let httpClient = MockMembershipsHTTPClient()
-        await httpClient.enqueue(response: httpResponse(
-            statusCode: 200,
-            headers: ["Link": #"<https://webexapis.com/v1/memberships?cursor=second>; rel="next""#],
-            body: #"{"items":[{"id":"membership-1"}]}"#
-        ))
-        let api = makeAPI(httpClient: httpClient)
-
-        do {
-            _ = try await api.listAll(maxPages: 1)
-            XCTFail("Expected page cap to throw")
-        } catch WebexSDKError.network(let message) {
-            XCTAssertEqual(message, "Memberships pagination page cap exceeded")
-            XCTAssertFalse(message.contains("cursor=second"))
-            XCTAssertFalse(message.contains("memberships-token"))
-        } catch {
-            XCTFail("Expected network error, got \(error)")
-        }
-
-        let requests = await httpClient.recordedRequests()
-        XCTAssertEqual(requests.map { $0.url?.absoluteString }, [
-            "https://webexapis.com/v1/memberships"
-        ])
-    }
-
-    func testListAllMembershipsRejectsRepeatedNextLinkBeforeRefetching() async throws {
-        let httpClient = MockMembershipsHTTPClient()
-        await httpClient.enqueue(response: httpResponse(
-            statusCode: 200,
-            headers: ["Link": #"<https://webexapis.com/v1/memberships?max=2>; rel="next""#],
-            body: #"{"items":[{"id":"membership-1"}]}"#
-        ))
-        await httpClient.enqueue(response: httpResponse(
-            statusCode: 200,
-            body: #"{"items":[{"id":"membership-again"}]}"#
-        ))
-        let api = makeAPI(httpClient: httpClient)
-
-        do {
-            _ = try await api.listAll(query: .init(max: 2))
-            XCTFail("Expected repeated initial link to throw")
-        } catch WebexSDKError.network(let message) {
-            XCTAssertEqual(message, "Repeated Memberships pagination link")
-            XCTAssertFalse(message.contains("max=2"))
-            XCTAssertFalse(message.contains("memberships-token"))
-        } catch {
-            XCTFail("Expected network error, got \(error)")
-        }
-
-        let requests = await httpClient.recordedRequests()
-        XCTAssertEqual(requests.map { $0.url?.absoluteString }, [
-            "https://webexapis.com/v1/memberships?max=2"
-        ])
-    }
-
-    func testListAllMembershipsRejectsInvalidPageCapWithoutRequest() async throws {
-        let httpClient = MockMembershipsHTTPClient()
-        let api = makeAPI(httpClient: httpClient)
-
-        do {
-            _ = try await api.listAll(maxPages: 0)
-            XCTFail("Expected invalid page cap to throw")
-        } catch WebexSDKError.network(let message) {
-            XCTAssertEqual(message, "Memberships pagination page cap must be greater than zero")
-            XCTAssertFalse(message.contains("memberships-token"))
-        } catch {
-            XCTFail("Expected network error, got \(error)")
-        }
-
-        let requests = await httpClient.recordedRequests()
-        XCTAssertTrue(requests.isEmpty)
     }
 
     func testCreateMembershipWithPersonEmailPostsJSONAndDecodesMembership() async throws {
