@@ -141,7 +141,7 @@ final class WebexClientRegistryTests: XCTestCase {
                 emails: ["user@example.com"],
                 displayName: "Ada Lovelace",
                 orgID: "org-id",
-                created: "2026-04-29T10:11:12Z"
+                created: iso8601Date("2026-04-29T10:11:12Z")
             )
         )
         let requests = await httpClient.recordedRequests()
@@ -714,6 +714,12 @@ final class WebexClientRegistryTests: XCTestCase {
             XCTAssertFalse(output.contains(secret), "Leaked \(secret)", file: file, line: line)
         }
     }
+}
+
+private func iso8601Date(_ value: String) -> Date {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter.date(from: value)!
 }
 
 private enum ControllableRegistryStoreError: Error, Equatable {
