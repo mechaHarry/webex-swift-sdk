@@ -11,7 +11,7 @@ This example:
 - exchanges the authorization code for tokens
 - stores the refresh-token record in the registry store
 - creates `WebexClient` with the initial access token in memory
-- calls `spaces.listAll(...)` with a bounded page cap
+- calls `spaces.list(params:)` and follows `page.nextPage` with a bounded page cap
 - prints returned Spaces metadata without printing tokens, authorization codes, or client secrets
 
 ## Run
