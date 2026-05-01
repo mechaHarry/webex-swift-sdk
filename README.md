@@ -62,6 +62,9 @@ same implementation as `client.spaces`.
 Memberships manage who belongs to a Webex space and whether a member is a
 moderator.
 
+Use `spark:memberships_read` for list/get calls and `spark:memberships_write`
+for create/update/delete calls.
+
 ```swift
 let members = try await client.memberships.listAll(query: .init(roomID: spaceID))
 let created = try await client.memberships.create(.init(

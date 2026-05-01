@@ -15,6 +15,30 @@ final class ListOptionsTests: XCTestCase {
         XCTAssertEqual(options.query.max, 100)
     }
 
+    func testPageSizeAndMaxPagesOverridesAreApplied() throws {
+        let options = try MembershipListOptions(environment: [
+            "WEBEX_ROOM_ID": "room-id",
+            "WEBEX_MEMBERSHIPS_PAGE_SIZE": "25",
+            "WEBEX_MEMBERSHIPS_MAX_PAGES": "3"
+        ])
+
+        XCTAssertEqual(options.pageSize, 25)
+        XCTAssertEqual(options.maxPages, 3)
+        XCTAssertEqual(options.query.max, 25)
+    }
+
+    func testInvalidPageSizeAndMaxPagesThrow() {
+        XCTAssertThrowsError(try MembershipListOptions(environment: [
+            "WEBEX_ROOM_ID": "room-id",
+            "WEBEX_MEMBERSHIPS_PAGE_SIZE": "0"
+        ]))
+
+        XCTAssertThrowsError(try MembershipListOptions(environment: [
+            "WEBEX_ROOM_ID": "room-id",
+            "WEBEX_MEMBERSHIPS_MAX_PAGES": "not-a-number"
+        ]))
+    }
+
     func testInvalidRedirectURIErrorDescriptionDoesNotExposeURL() throws {
         let redirectURI = "http://[::1/oauth/callback"
 
