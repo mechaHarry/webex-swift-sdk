@@ -30,15 +30,13 @@ struct WebexMembershipsListSmoke {
         let registry = WebexClientRegistry(store: store, httpClient: httpClient)
 
         print("Using Keychain service: \(keychainService)")
-        print("Using redirect URI: \(configuration.redirectURI.absoluteString)")
         print("Opening Webex authorization for client id: \(configuration.clientID)")
         let authorized = try await registry.authorizeAndAddAccount(
             configuration: configuration,
             openAuthorizationURL: { authorizationURL in
                 print("")
-                print("Opening Webex authorization URL in your default browser.")
-                print("If the browser does not open, paste this URL manually:")
-                print(authorizationURL.absoluteString)
+                print("Opening Webex authorization in your default browser.")
+                print("If the browser does not open, verify your redirect URI matches the README and rerun after fixing browser defaults.")
                 print("")
                 guard NSWorkspace.shared.open(authorizationURL) else {
                     throw SmokeError.failedToOpenAuthorizationURL
