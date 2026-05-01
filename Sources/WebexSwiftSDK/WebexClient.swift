@@ -4,6 +4,7 @@ public struct WebexClient: Sendable {
     public let accountID: WebexAccountID
     public let people: PeopleAPI
     public let spaces: SpacesAPI
+    public let memberships: MembershipsAPI
 
     public var rooms: RoomsAPI {
         spaces
@@ -40,6 +41,7 @@ public struct WebexClient: Sendable {
         self.accountID = accountID
         self.people = PeopleAPI(transport: transport)
         self.spaces = SpacesAPI(transport: transport)
+        self.memberships = MembershipsAPI(transport: transport)
         self.tokenManager = tokenManager
     }
 }
