@@ -69,7 +69,7 @@ final class SpacesAPITests: XCTestCase {
         }
     }
 
-    func testListSpacesSendsTypedQueryAndDecodesPage() async throws {
+    func testListSpacesSendsParamsAndDecodesPage() async throws {
         let httpClient = MockSpacesHTTPClient()
         await httpClient.enqueue(response: httpResponse(
             statusCode: 200,
@@ -78,7 +78,7 @@ final class SpacesAPITests: XCTestCase {
         ))
         let api = makeAPI(httpClient: httpClient)
 
-        let page = try await api.list(query: ListSpacesQuery(
+        let page = try await api.list(params: ListSpacesParams(
             teamID: "team-1",
             type: .group,
             sortBy: .lastActivity,
@@ -97,7 +97,7 @@ final class SpacesAPITests: XCTestCase {
         XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer spaces-token")
     }
 
-    func testListAllFollowsNextLinksThroughEmptyPages() async throws {
+    func testListSpacesNextPageUsesParsedWebexPageLink() async throws {
         let httpClient = MockSpacesHTTPClient()
         await httpClient.enqueue(response: httpResponse(
             statusCode: 200,
@@ -106,166 +106,21 @@ final class SpacesAPITests: XCTestCase {
         ))
         await httpClient.enqueue(response: httpResponse(
             statusCode: 200,
-            headers: ["Link": #"<https://webexapis.com/v1/rooms?cursor=third>; rel="next""#],
-            body: #"{"items":[]}"#
-        ))
-        await httpClient.enqueue(response: httpResponse(
-            statusCode: 200,
-            body: #"{"items":[{"id":"space-3","title":"Three"}]}"#
-        ))
-        let api = makeAPI(httpClient: httpClient)
-
-        let spaces = try await api.listAll(query: .init(max: 2))
-
-        XCTAssertEqual(spaces.map(\.id), ["space-1", "space-3"])
-        let requests = await httpClient.recordedRequests()
-        XCTAssertEqual(requests.map { $0.url?.absoluteString }, [
-            "https://webexapis.com/v1/rooms?max=2",
-            "https://webexapis.com/v1/rooms?cursor=second",
-            "https://webexapis.com/v1/rooms?cursor=third"
-        ])
-    }
-
-    func testListAllRejectsRepeatedNextLinkWithoutLeakingURLOrToken() async throws {
-        let httpClient = MockSpacesHTTPClient()
-        await httpClient.enqueue(response: httpResponse(
-            statusCode: 200,
-            headers: ["Link": #"<https://webexapis.com/v1/rooms?cursor=loop>; rel="next""#],
-            body: #"{"items":[{"id":"space-1","title":"One"}]}"#
-        ))
-        await httpClient.enqueue(response: httpResponse(
-            statusCode: 200,
-            headers: ["Link": #"<https://webexapis.com/v1/rooms?cursor=loop>; rel="next""#],
             body: #"{"items":[{"id":"space-2","title":"Two"}]}"#
         ))
         let api = makeAPI(httpClient: httpClient)
 
-        do {
-            _ = try await api.listAll()
-            XCTFail("Expected repeated next link to throw")
-        } catch WebexSDKError.network(let message) {
-            XCTAssertEqual(message, "Repeated Spaces pagination link")
-            XCTAssertFalse(message.contains("cursor=loop"))
-            XCTAssertFalse(message.contains("spaces-token"))
-        } catch {
-            XCTFail("Expected network error, got \(error)")
-        }
+        let firstPage = try await api.list(params: .init(max: 10))
+        let nextPage = try XCTUnwrap(firstPage.nextPage)
+        let secondPage = try await api.list(nextPage: nextPage)
 
+        XCTAssertEqual(firstPage.items.map(\.id), ["space-1"])
+        XCTAssertEqual(secondPage.items.map(\.id), ["space-2"])
         let requests = await httpClient.recordedRequests()
         XCTAssertEqual(requests.map { $0.url?.absoluteString }, [
-            "https://webexapis.com/v1/rooms",
-            "https://webexapis.com/v1/rooms?cursor=loop"
+            "https://webexapis.com/v1/rooms?max=10",
+            "https://webexapis.com/v1/rooms?cursor=second"
         ])
-    }
-
-    func testListAllRejectsNextLinkBackToInitialRequestWithoutRefetching() async throws {
-        let httpClient = MockSpacesHTTPClient()
-        await httpClient.enqueue(response: httpResponse(
-            statusCode: 200,
-            headers: ["Link": #"<https://webexapis.com/v1/rooms?max=2>; rel="next""#],
-            body: #"{"items":[{"id":"space-1","title":"One"}]}"#
-        ))
-        await httpClient.enqueue(response: httpResponse(
-            statusCode: 200,
-            body: #"{"items":[{"id":"space-1-again","title":"One Again"}]}"#
-        ))
-        let api = makeAPI(httpClient: httpClient)
-
-        do {
-            _ = try await api.listAll(query: .init(max: 2))
-            XCTFail("Expected initial pagination loop to throw")
-        } catch WebexSDKError.network(let message) {
-            XCTAssertEqual(message, "Repeated Spaces pagination link")
-            XCTAssertFalse(message.contains("max=2"))
-            XCTAssertFalse(message.contains("spaces-token"))
-        } catch {
-            XCTFail("Expected network error, got \(error)")
-        }
-
-        let requests = await httpClient.recordedRequests()
-        XCTAssertEqual(requests.map { $0.url?.absoluteString }, [
-            "https://webexapis.com/v1/rooms?max=2"
-        ])
-    }
-
-    func testListAllRejectsABAPaginationCycleBeforeRefetchingA() async throws {
-        let httpClient = MockSpacesHTTPClient()
-        await httpClient.enqueue(response: httpResponse(
-            statusCode: 200,
-            headers: ["Link": #"<https://webexapis.com/v1/rooms?cursor=b>; rel="next""#],
-            body: #"{"items":[{"id":"space-a","title":"A"}]}"#
-        ))
-        await httpClient.enqueue(response: httpResponse(
-            statusCode: 200,
-            headers: ["Link": #"<https://webexapis.com/v1/rooms?max=1>; rel="next""#],
-            body: #"{"items":[{"id":"space-b","title":"B"}]}"#
-        ))
-        await httpClient.enqueue(response: httpResponse(
-            statusCode: 200,
-            body: #"{"items":[{"id":"space-a-again","title":"A Again"}]}"#
-        ))
-        let api = makeAPI(httpClient: httpClient)
-
-        do {
-            _ = try await api.listAll(query: .init(max: 1))
-            XCTFail("Expected pagination cycle to throw")
-        } catch WebexSDKError.network(let message) {
-            XCTAssertEqual(message, "Repeated Spaces pagination link")
-            XCTAssertFalse(message.contains("max=1"))
-            XCTAssertFalse(message.contains("spaces-token"))
-        } catch {
-            XCTFail("Expected network error, got \(error)")
-        }
-
-        let requests = await httpClient.recordedRequests()
-        XCTAssertEqual(requests.map { $0.url?.absoluteString }, [
-            "https://webexapis.com/v1/rooms?max=1",
-            "https://webexapis.com/v1/rooms?cursor=b"
-        ])
-    }
-
-    func testListAllEnforcesPageCapWithoutFollowingNextLink() async throws {
-        let httpClient = MockSpacesHTTPClient()
-        await httpClient.enqueue(response: httpResponse(
-            statusCode: 200,
-            headers: ["Link": #"<https://webexapis.com/v1/rooms?cursor=second>; rel="next""#],
-            body: #"{"items":[{"id":"space-1","title":"One"}]}"#
-        ))
-        let api = makeAPI(httpClient: httpClient)
-
-        do {
-            _ = try await api.listAll(maxPages: 1)
-            XCTFail("Expected page cap to throw")
-        } catch WebexSDKError.network(let message) {
-            XCTAssertEqual(message, "Spaces pagination page cap exceeded")
-            XCTAssertFalse(message.contains("cursor=second"))
-            XCTAssertFalse(message.contains("spaces-token"))
-        } catch {
-            XCTFail("Expected network error, got \(error)")
-        }
-
-        let requests = await httpClient.recordedRequests()
-        XCTAssertEqual(requests.map { $0.url?.absoluteString }, [
-            "https://webexapis.com/v1/rooms"
-        ])
-    }
-
-    func testListAllRejectsInvalidPageCapWithoutRequest() async throws {
-        let httpClient = MockSpacesHTTPClient()
-        let api = makeAPI(httpClient: httpClient)
-
-        do {
-            _ = try await api.listAll(maxPages: 0)
-            XCTFail("Expected invalid page cap to throw")
-        } catch WebexSDKError.network(let message) {
-            XCTAssertEqual(message, "Spaces pagination page cap must be greater than zero")
-            XCTAssertFalse(message.contains("spaces-token"))
-        } catch {
-            XCTFail("Expected network error, got \(error)")
-        }
-
-        let requests = await httpClient.recordedRequests()
-        XCTAssertTrue(requests.isEmpty)
     }
 
     func testCreateSpacePostsJSONAndDecodesCreatedSpace() async throws {

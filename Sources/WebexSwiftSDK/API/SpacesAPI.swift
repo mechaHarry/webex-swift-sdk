@@ -6,7 +6,7 @@ public enum WebexSpaceSort: String, Equatable, Sendable {
     case created
 }
 
-public struct ListSpacesQuery: Equatable, Sendable {
+public struct ListSpacesParams: Equatable, Sendable {
     public let teamID: String?
     public let type: WebexSpaceType?
     public let sortBy: WebexSpaceSort?
@@ -135,47 +135,15 @@ public struct SpacesAPI: Sendable {
         self.transport = transport
     }
 
-    public func list(query: ListSpacesQuery = ListSpacesQuery()) async throws -> WebexSpaceListPage {
+    public func list(params: ListSpacesParams = ListSpacesParams()) async throws -> WebexSpaceListPage {
         try await list(request: WebexRequest(
             path: "/v1/rooms",
-            queryItems: query.queryItems
+            queryItems: params.queryItems
         ))
     }
 
-    public func listAll(
-        query: ListSpacesQuery = ListSpacesQuery(),
-        maxPages: Int = 1_000
-    ) async throws -> [WebexSpace] {
-        guard maxPages > 0 else {
-            throw WebexSDKError.network("Spaces pagination page cap must be greater than zero")
-        }
-
-        let firstRequest = WebexRequest(
-            path: "/v1/rooms",
-            queryItems: query.queryItems
-        )
-        var page = try await list(request: firstRequest)
-        var pagesFetched = 1
-        var seenPageRequests: Set<String> = [paginationRequestKey(firstRequest)]
-        var spaces = page.items
-
-        while let nextPage = page.nextPage {
-            let nextRequest = nextPage.request
-
-            guard pagesFetched < maxPages else {
-                throw WebexSDKError.network("Spaces pagination page cap exceeded")
-            }
-            guard seenPageRequests.insert(paginationRequestKey(nextRequest)).inserted else {
-                throw WebexSDKError.network("Repeated Spaces pagination link")
-            }
-
-            try Task.checkCancellation()
-            page = try await list(request: nextRequest)
-            pagesFetched += 1
-            spaces.append(contentsOf: page.items)
-        }
-
-        return spaces
+    public func list(nextPage: WebexPageLink) async throws -> WebexSpaceListPage {
+        try await list(request: nextPage.request)
     }
 
     public func create(_ request: CreateSpaceRequest) async throws -> WebexSpace {
@@ -224,22 +192,6 @@ public struct SpacesAPI: Sendable {
         )
     }
 
-    private func paginationRequestKey(_ request: WebexRequest) -> String {
-        let normalizedPath = request.path.hasPrefix("/") ? request.path : "/\(request.path)"
-        let queryKey = request.queryItems
-            .map { item in
-                "\(item.name.count):\(item.name)=\(item.value?.count ?? -1):\(item.value ?? "")"
-            }
-            .sorted()
-            .joined(separator: "&")
-
-        if queryKey.isEmpty {
-            return "\(request.method.uppercased()) \(normalizedPath)"
-        }
-
-        return "\(request.method.uppercased()) \(normalizedPath)?\(queryKey)"
-    }
-
     private func spacePath(_ spaceID: String) throws -> String {
         let trimmedID = spaceID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedID.isEmpty else {
@@ -263,6 +215,6 @@ private struct WebexSpaceListEnvelope: Decodable {
 }
 
 public typealias RoomsAPI = SpacesAPI
-public typealias ListRoomsQuery = ListSpacesQuery
+public typealias ListRoomsParams = ListSpacesParams
 public typealias CreateRoomRequest = CreateSpaceRequest
 public typealias UpdateRoomRequest = UpdateSpaceRequest

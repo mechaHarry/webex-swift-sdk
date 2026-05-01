@@ -31,7 +31,7 @@ is EOL as of 2025-01-31 and should be treated as legacy/deprecated.
 - Preferred SDK API group: `client.spaces`.
 - Compatibility alias: `client.rooms`.
 - Preferred model names: `WebexSpace`, `WebexSpaceType`,
-  `ListSpacesQuery`, `CreateSpaceRequest`, `UpdateSpaceRequest`.
+  `ListSpacesParams`, `CreateSpaceRequest`, `UpdateSpaceRequest`.
 - Compatibility aliases can map room names to the same types:
   `WebexRoom = WebexSpace`, `RoomsAPI = SpacesAPI`.
 - Public docs should say that "room" and "space" map to the same Webex REST
@@ -66,8 +66,9 @@ List behavior:
 
 - Default is rooms/spaces visible to the authenticated user.
 - Long result sets paginate with RFC5988 `Link`.
-- Follow `rel="next"` until absent.
-- Do not stop only because a page has zero items.
+- Use `spaces.list(params:)` for one Webex page. If `page.nextPage` is
+  present, the host app can call `spaces.list(nextPage:)` when it wants the
+  next page. Do not fetch every page by default for UI views.
 - Return per-item partial errors rather than failing an entire list page.
 
 ## Space Fields To Model
