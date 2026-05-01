@@ -135,7 +135,7 @@ final class PeopleAPITests: XCTestCase {
     }
 
     func testPersonStatusPreservesUnknownValues() throws {
-        let json = Data(#"{"id":"person-id","status":"future-status"}"#.utf8)
+        let json = Data(#"{"id":"person-id","emails":["user@example.com"],"status":"future-status"}"#.utf8)
 
         let person = try JSONDecoder().decode(WebexPerson.self, from: json)
 
@@ -143,11 +143,63 @@ final class PeopleAPITests: XCTestCase {
     }
 
     func testPersonTypePreservesUnknownValues() throws {
-        let json = Data(#"{"id":"person-id","type":"future-type"}"#.utf8)
+        let json = Data(#"{"id":"person-id","emails":["user@example.com"],"type":"future-type"}"#.utf8)
 
         let person = try JSONDecoder().decode(WebexPerson.self, from: json)
 
         XCTAssertEqual(person.type, .unknown("future-type"))
+    }
+
+    func testPersonRequiresEmails() throws {
+        let json = Data(#"{"id":"person-id"}"#.utf8)
+
+        XCTAssertThrowsError(try JSONDecoder().decode(WebexPerson.self, from: json)) { error in
+            guard case DecodingError.keyNotFound(let key, _) = error else {
+                return XCTFail("Expected keyNotFound error, got \(error)")
+            }
+
+            XCTAssertEqual(key.stringValue, "emails")
+        }
+    }
+
+    func testPersonPhoneNumberTypePreservesUnknownValues() throws {
+        let json = Data("""
+        {
+          "id": "person-id",
+          "emails": ["user@example.com"],
+          "phoneNumbers": [
+            {
+              "type": "satellite",
+              "value": "+15551234567",
+              "primary": true
+            }
+          ]
+        }
+        """.utf8)
+
+        let person = try JSONDecoder().decode(WebexPerson.self, from: json)
+
+        XCTAssertEqual(person.phoneNumbers?.first?.type, .unknown("satellite"))
+    }
+
+    func testPersonSIPAddressTypePreservesUnknownValues() throws {
+        let json = Data("""
+        {
+          "id": "person-id",
+          "emails": ["user@example.com"],
+          "sipAddresses": [
+            {
+              "type": "future-sip",
+              "value": "user@example.com",
+              "primary": true
+            }
+          ]
+        }
+        """.utf8)
+
+        let person = try JSONDecoder().decode(WebexPerson.self, from: json)
+
+        XCTAssertEqual(person.sipAddresses?.first?.type, .unknown("future-sip"))
     }
 
     func testMeWithCallingDataSendsQueryAndDecodesPerson() async throws {
@@ -207,7 +259,7 @@ final class PeopleAPITests: XCTestCase {
             callingData: true,
             locationID: "location-id",
             max: 50,
-            excludeStatus: "inactive"
+            excludeStatus: true
         ))
 
         XCTAssertEqual(page.items.map(\.id), ["person-1"])
@@ -217,7 +269,7 @@ final class PeopleAPITests: XCTestCase {
         XCTAssertEqual(requests.count, 1)
         XCTAssertEqual(
             requests[0].url?.absoluteString,
-            "https://webexapis.com/v1/people?email=user@example.com&displayName=Ada&id=person-1,person-2&orgId=org-id&roles=role-1,role-2&callingData=true&locationId=location-id&max=50&excludeStatus=inactive"
+            "https://webexapis.com/v1/people?email=user@example.com&displayName=Ada&id=person-1,person-2&orgId=org-id&roles=role-1,role-2&callingData=true&locationId=location-id&max=50&excludeStatus=true"
         )
         XCTAssertEqual(requests[0].httpMethod, "GET")
         XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer people-token")
@@ -228,11 +280,11 @@ final class PeopleAPITests: XCTestCase {
         await httpClient.enqueue(response: httpResponse(
             statusCode: 200,
             headers: ["Link": #"<https://webexapis.com/v1/people?cursor=second>; rel="next""#],
-            body: #"{"items":[{"id":"person-1"}]}"#
+            body: #"{"items":[{"id":"person-1","emails":["one@example.com"]}]}"#
         ))
         await httpClient.enqueue(response: httpResponse(
             statusCode: 200,
-            body: #"{"items":[{"id":"person-2"}]}"#
+            body: #"{"items":[{"id":"person-2","emails":["two@example.com"]}]}"#
         ))
         let api = makeAPI(httpClient: httpClient)
 
@@ -241,7 +293,9 @@ final class PeopleAPITests: XCTestCase {
         let secondPage = try await api.list(nextPage: nextPage)
 
         XCTAssertEqual(firstPage.items.map(\.id), ["person-1"])
+        XCTAssertNil(firstPage.notFoundIDs)
         XCTAssertEqual(secondPage.items.map(\.id), ["person-2"])
+        XCTAssertNil(secondPage.notFoundIDs)
         let requests = await httpClient.recordedRequests()
         XCTAssertEqual(requests.map { $0.url?.absoluteString }, [
             "https://webexapis.com/v1/people?max=10",

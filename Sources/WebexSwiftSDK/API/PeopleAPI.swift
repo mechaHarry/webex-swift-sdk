@@ -266,7 +266,7 @@ public struct WebexPersonSIPAddress: Codable, Equatable, Sendable {
 
 public struct WebexPerson: Equatable, Decodable, Sendable {
     public let id: String
-    public let emails: [String]?
+    public let emails: [String]
     public let phoneNumbers: [WebexPersonPhoneNumber]?
     public let `extension`: String?
     public let locationID: String?
@@ -297,7 +297,7 @@ public struct WebexPerson: Equatable, Decodable, Sendable {
 
     public init(
         id: String,
-        emails: [String]? = nil,
+        emails: [String],
         phoneNumbers: [WebexPersonPhoneNumber]? = nil,
         extension: String? = nil,
         locationID: String? = nil,
@@ -357,36 +357,6 @@ public struct WebexPerson: Equatable, Decodable, Sendable {
         self.type = type
     }
 
-    public init(
-        id: String,
-        emails: [String],
-        displayName: String?,
-        orgID: String?,
-        created: String?
-    ) {
-        self.init(
-            id: id,
-            emails: emails,
-            displayName: displayName,
-            orgID: orgID,
-            created: Self.parseLegacyDate(created)
-        )
-    }
-
-    private static func parseLegacyDate(_ value: String?) -> Date? {
-        guard let value else {
-            return nil
-        }
-
-        let fractionalFormatter = ISO8601DateFormatter()
-        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-
-        return fractionalFormatter.date(from: value) ?? formatter.date(from: value)
-    }
-
     private enum CodingKeys: String, CodingKey {
         case id
         case emails
@@ -422,7 +392,7 @@ public struct WebexPerson: Equatable, Decodable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try container.decode(String.self, forKey: .id)
-        self.emails = try container.decodeIfPresent([String].self, forKey: .emails)
+        self.emails = try container.decode([String].self, forKey: .emails)
         self.phoneNumbers = try container.decodeIfPresent([WebexPersonPhoneNumber].self, forKey: .phoneNumbers)
         self.extension = try container.decodeIfPresent(String.self, forKey: .extension)
         self.locationID = try container.decodeIfPresent(String.self, forKey: .locationID)
@@ -462,7 +432,7 @@ public struct ListPeopleParams: Equatable, Sendable {
     public let callingData: Bool?
     public let locationID: String?
     public let max: Int?
-    public let excludeStatus: String?
+    public let excludeStatus: Bool?
 
     public init(
         email: String? = nil,
@@ -473,7 +443,7 @@ public struct ListPeopleParams: Equatable, Sendable {
         callingData: Bool? = nil,
         locationID: String? = nil,
         max: Int? = nil,
-        excludeStatus: String? = nil
+        excludeStatus: Bool? = nil
     ) {
         self.email = email
         self.displayName = displayName
@@ -513,7 +483,7 @@ public struct ListPeopleParams: Equatable, Sendable {
             items.append(URLQueryItem(name: "max", value: String(max)))
         }
         if let excludeStatus {
-            items.append(URLQueryItem(name: "excludeStatus", value: excludeStatus))
+            items.append(URLQueryItem(name: "excludeStatus", value: String(excludeStatus)))
         }
         return items
     }
@@ -521,12 +491,12 @@ public struct ListPeopleParams: Equatable, Sendable {
 
 public struct WebexPersonListPage: Equatable, Sendable {
     public let items: [WebexPerson]
-    public let notFoundIDs: [String]
+    public let notFoundIDs: [String]?
     public let nextPage: WebexPageLink?
 
     public init(
         items: [WebexPerson],
-        notFoundIDs: [String] = [],
+        notFoundIDs: [String]? = nil,
         nextPage: WebexPageLink?
     ) {
         self.items = items
@@ -575,7 +545,7 @@ public struct PeopleAPI: Sendable {
         let envelope = try JSONDecoder().decode(WebexPersonListEnvelope.self, from: response.data)
         return WebexPersonListPage(
             items: envelope.items,
-            notFoundIDs: envelope.notFoundIDs ?? [],
+            notFoundIDs: envelope.notFoundIDs,
             nextPage: WebexPageLink.next(from: response.response)
         )
     }
