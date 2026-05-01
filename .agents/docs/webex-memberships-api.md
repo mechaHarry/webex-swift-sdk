@@ -16,6 +16,10 @@ Memberships represent a person's relationship to a Webex room/space.
 
 Compliance Officer convenience flows are out of scope for v1.2.0.
 
+Use `memberships.list(params:)` for one Webex page. If `page.nextPage` is
+present, call `memberships.list(nextPage:)` only when the app needs another
+page.
+
 ## Normal Scopes
 
 - `spark:memberships_read`: list and get.

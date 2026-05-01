@@ -1,6 +1,6 @@
 import Foundation
 
-public struct ListMembershipsQuery: Equatable, Sendable {
+public struct ListMembershipsParams: Equatable, Sendable {
     public let roomID: String?
     public let personID: String?
     public let personEmail: String?
@@ -99,47 +99,15 @@ public struct MembershipsAPI: Sendable {
         self.transport = transport
     }
 
-    public func list(query: ListMembershipsQuery = ListMembershipsQuery()) async throws -> WebexMembershipListPage {
+    public func list(params: ListMembershipsParams = ListMembershipsParams()) async throws -> WebexMembershipListPage {
         try await list(request: WebexRequest(
             path: "/v1/memberships",
-            queryItems: query.queryItems
+            queryItems: params.queryItems
         ))
     }
 
-    public func listAll(
-        query: ListMembershipsQuery = ListMembershipsQuery(),
-        maxPages: Int = 1_000
-    ) async throws -> [WebexMembership] {
-        guard maxPages > 0 else {
-            throw WebexSDKError.network("Memberships pagination page cap must be greater than zero")
-        }
-
-        let firstRequest = WebexRequest(
-            path: "/v1/memberships",
-            queryItems: query.queryItems
-        )
-        var page = try await list(request: firstRequest)
-        var pagesFetched = 1
-        var seenPageRequests: Set<String> = [paginationRequestKey(firstRequest)]
-        var memberships = page.items
-
-        while let nextPage = page.nextPage {
-            let nextRequest = nextPage.request
-
-            guard pagesFetched < maxPages else {
-                throw WebexSDKError.network("Memberships pagination page cap exceeded")
-            }
-            guard seenPageRequests.insert(paginationRequestKey(nextRequest)).inserted else {
-                throw WebexSDKError.network("Repeated Memberships pagination link")
-            }
-
-            try Task.checkCancellation()
-            page = try await list(request: nextRequest)
-            pagesFetched += 1
-            memberships.append(contentsOf: page.items)
-        }
-
-        return memberships
+    public func list(nextPage: WebexPageLink) async throws -> WebexMembershipListPage {
+        try await list(request: nextPage.request)
     }
 
     public func create(_ request: CreateMembershipRequest) async throws -> WebexMembership {
@@ -189,22 +157,6 @@ public struct MembershipsAPI: Sendable {
             items: envelope.items,
             nextPage: WebexPageLink.next(from: response.response)
         )
-    }
-
-    private func paginationRequestKey(_ request: WebexRequest) -> String {
-        let normalizedPath = request.path.hasPrefix("/") ? request.path : "/\(request.path)"
-        let queryKey = request.queryItems
-            .map { item in
-                "\(item.name.count):\(item.name)=\(item.value?.count ?? -1):\(item.value ?? "")"
-            }
-            .sorted()
-            .joined(separator: "&")
-
-        if queryKey.isEmpty {
-            return "\(request.method.uppercased()) \(normalizedPath)"
-        }
-
-        return "\(request.method.uppercased()) \(normalizedPath)?\(queryKey)"
     }
 
     private func membershipPath(_ membershipID: String) throws -> String {
