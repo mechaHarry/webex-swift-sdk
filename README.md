@@ -40,12 +40,16 @@ these collaboration containers spaces. The SDK exposes `client.spaces` as the
 preferred interface and `client.rooms` as a compatibility alias.
 
 ```swift
-let page = try await client.spaces.list(query: .init(max: 50))
+let page = try await client.spaces.list(params: .init(max: 50))
 for space in page.items {
     print(space.id, space.title ?? "(untitled)")
 }
 
-let allSpaces = try await client.spaces.listAll(query: .init(type: .group))
+if let nextPage = page.nextPage {
+    let next = try await client.spaces.list(nextPage: nextPage)
+    print("Fetched another \(next.items.count) spaces")
+}
+
 let created = try await client.spaces.create(.init(title: "Incident Review"))
 let updated = try await client.spaces.update(
     spaceID: created.id,
@@ -66,7 +70,11 @@ Use `spark:memberships_read` for list/get calls and `spark:memberships_write`
 for create/update/delete calls.
 
 ```swift
-let members = try await client.memberships.listAll(query: .init(roomID: spaceID))
+let members = try await client.memberships.list(params: .init(roomID: spaceID, max: 50))
+for member in members.items {
+    print(member.id, member.personDisplayName ?? member.personEmail ?? "(unknown)")
+}
+
 let created = try await client.memberships.create(.init(
     roomID: spaceID,
     personEmail: "person@example.com"
@@ -78,8 +86,20 @@ let updated = try await client.memberships.update(
 try await client.memberships.delete(membershipID: updated.id)
 ```
 
+## People
+
+People reads are available through `client.people`. Use `spark:people_read` for
+normal search/detail reads and `spark-admin:people_read` for org-wide listing.
+
+```swift
+let me = try await client.people.me()
+let people = try await client.people.list(params: .init(id: me.id, excludeStatus: true))
+print(people.items.first?.displayName ?? me.id)
+```
+
 ## Examples
 
 - `Examples/WebexClientSmoke`: interactive OAuth smoke test that uses the SDK-owned loopback listener, stores a registry account, exchanges an authorization code, creates `WebexClient`, and calls `people.me()`.
-- `Examples/WebexSpacesListSmoke`: interactive OAuth smoke test that lists Spaces with `client.spaces.listAll(...)` using bounded pagination.
-- `Examples/WebexMembershipsListSmoke`: interactive OAuth smoke test that lists Memberships for `WEBEX_ROOM_ID` with `client.memberships.listAll(...)` using bounded pagination.
+- `Examples/WebexPeopleReadSmoke`: interactive OAuth smoke test that reads the current person and performs a bounded People list lookup.
+- `Examples/WebexSpacesListSmoke`: interactive OAuth smoke test that lists Spaces with explicit bounded pagination.
+- `Examples/WebexMembershipsListSmoke`: interactive OAuth smoke test that lists one bounded Memberships page for `WEBEX_ROOM_ID`.
