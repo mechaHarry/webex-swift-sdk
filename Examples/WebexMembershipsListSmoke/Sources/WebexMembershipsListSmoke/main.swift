@@ -15,7 +15,7 @@ struct WebexMembershipsListSmoke {
             fputs("Increase WEBEX_MEMBERSHIPS_MAX_PAGES or lower WEBEX_MEMBERSHIPS_PAGE_SIZE.\n", stderr)
             Foundation.exit(1)
         } catch {
-            fputs("Memberships list smoke failed: \(error)\n", stderr)
+            fputs("Memberships list smoke failed: \(failureDescription(for: error))\n", stderr)
             Foundation.exit(1)
         }
     }
@@ -91,6 +91,14 @@ struct WebexMembershipsListSmoke {
             scopes: scopes,
             prefersEphemeralWebBrowserSession: false
         )
+    }
+
+    static func failureDescription(for error: Error) -> String {
+        if case WebexSDKError.invalidAuthorizationCallback = error {
+            return "Invalid authorization callback"
+        }
+
+        return String(describing: error)
     }
 
     private static func optionalBool(_ value: Bool?) -> String {

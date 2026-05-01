@@ -1,4 +1,5 @@
 import XCTest
+import WebexSwiftSDK
 @testable import WebexMembershipsListSmoke
 
 final class ListOptionsTests: XCTestCase {
@@ -28,5 +29,19 @@ final class ListOptionsTests: XCTestCase {
             XCTAssertFalse(description.contains(redirectURI))
             XCTAssertFalse(description.contains("/oauth/callback"))
         }
+    }
+
+    func testFailureDescriptionDoesNotExposeInvalidAuthorizationCallbackURL() {
+        let callbackURL = "http://127.0.0.1:8282/oauth/callback?code=secret-code&state=secret-state"
+        let description = WebexMembershipsListSmoke.failureDescription(
+            for: WebexSDKError.invalidAuthorizationCallback(callbackURL)
+        )
+
+        XCTAssertEqual(description, "Invalid authorization callback")
+        XCTAssertFalse(description.contains("http://"))
+        XCTAssertFalse(description.contains("127.0.0.1"))
+        XCTAssertFalse(description.contains("/oauth/callback"))
+        XCTAssertFalse(description.contains("code="))
+        XCTAssertFalse(description.contains("state="))
     }
 }
