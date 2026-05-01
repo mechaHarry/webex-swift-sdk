@@ -14,7 +14,7 @@ This package provides the OAuth and authenticated REST foundation:
 - memory-only access-token cache by default
 - coordinated token refresh
 - authenticated REST transport
-- typed People and Spaces APIs
+- typed People, Spaces, and Memberships APIs
 
 ## Example
 
@@ -57,7 +57,26 @@ try await client.spaces.delete(spaceID: updated.id)
 For developers following Webex's endpoint reference, `client.rooms` maps to the
 same implementation as `client.spaces`.
 
+## Memberships
+
+Memberships manage who belongs to a Webex space and whether a member is a
+moderator.
+
+```swift
+let members = try await client.memberships.listAll(query: .init(roomID: spaceID))
+let created = try await client.memberships.create(.init(
+    roomID: spaceID,
+    personEmail: "person@example.com"
+))
+let updated = try await client.memberships.update(
+    membershipID: created.id,
+    .init(isModerator: true)
+)
+try await client.memberships.delete(membershipID: updated.id)
+```
+
 ## Examples
 
 - `Examples/WebexClientSmoke`: interactive OAuth smoke test that uses the SDK-owned loopback listener, stores a registry account, exchanges an authorization code, creates `WebexClient`, and calls `people.me()`.
 - `Examples/WebexSpacesListSmoke`: interactive OAuth smoke test that lists Spaces with `client.spaces.listAll(...)` using bounded pagination.
+- `Examples/WebexMembershipsListSmoke`: interactive OAuth smoke test that lists Memberships for `WEBEX_ROOM_ID` with `client.memberships.listAll(...)` using bounded pagination.
