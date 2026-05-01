@@ -70,14 +70,14 @@ struct WebexMembershipsListSmoke {
         }
     }
 
-    private static func configurationFromEnvironment(
+    static func configurationFromEnvironment(
         _ environment: [String: String]
     ) throws -> WebexIntegrationConfiguration {
         let clientID = try requiredEnvironment("WEBEX_CLIENT_ID", environment: environment)
         let clientSecret = try requiredEnvironment("WEBEX_CLIENT_SECRET", environment: environment)
         let redirectURIString = environment["WEBEX_REDIRECT_URI"] ?? WebexOAuthLoopbackRedirectListener.defaultRedirectURI.absoluteString
         guard let redirectURI = URL(string: redirectURIString) else {
-            throw SmokeError.invalidRedirectURI(redirectURIString)
+            throw SmokeError.invalidRedirectURI
         }
 
         let scopes = (environment["WEBEX_SCOPES"] ?? "spark:memberships_read")
@@ -172,7 +172,7 @@ struct MembershipListOptions {
 
 private enum SmokeError: Error, CustomStringConvertible {
     case missingEnvironment(String)
-    case invalidRedirectURI(String)
+    case invalidRedirectURI
     case failedToOpenAuthorizationURL
     case invalidInteger(name: String, value: String, minimum: Int, maximum: Int)
 
@@ -180,8 +180,8 @@ private enum SmokeError: Error, CustomStringConvertible {
         switch self {
         case .missingEnvironment(let name):
             return "Missing required environment variable \(name)"
-        case .invalidRedirectURI(let value):
-            return "Invalid WEBEX_REDIRECT_URI: \(value)"
+        case .invalidRedirectURI:
+            return "Invalid WEBEX_REDIRECT_URI"
         case .failedToOpenAuthorizationURL:
             return "Failed to open the Webex authorization URL"
         case .invalidInteger(let name, let value, let minimum, let maximum):
