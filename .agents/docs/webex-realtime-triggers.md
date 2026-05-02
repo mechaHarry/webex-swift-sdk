@@ -196,6 +196,14 @@ SDK models/triggers. It is not an official replacement for documented Webex
 REST endpoints, and resource reads/writes should continue to use the REST API
 groups.
 
+The token used for WebSocket listening needs the SDK-listen scopes documented
+by the Webex JavaScript SDK: `spark:all` plus `spark:kms`. Narrow REST read
+scopes such as `spark:messages_read`, `spark:rooms_read`,
+`spark:memberships_read`, and `spark:people_read` can still work for REST
+calls but can fail WDM device registration with HTTP 403 before a socket opens.
+After changing an integration's scopes, reauthorize so the access token actually
+contains the new grants.
+
 The implementation is sample-backed and experimental. It uses U2C/WDM device
 discovery, `URLSessionWebSocketTask`, authorization frames, ack frames,
 reconnect/backoff, stale-device retry, auth retry, unknown event preservation,

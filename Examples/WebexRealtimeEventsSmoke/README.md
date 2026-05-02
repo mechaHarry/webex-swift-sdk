@@ -47,11 +47,17 @@ WEBEX_CLIENT_ID="your-client-id"
 WEBEX_CLIENT_SECRET="your-client-secret"
 ```
 
+For realtime WebSocket listening, the Webex JavaScript SDK documentation says
+the token needs `spark:all` and `spark:kms`. Add those scopes to the Webex
+integration before authorizing this smoke. If you previously authorized the
+same integration with narrower scopes, reauthorize after updating the
+integration scopes.
+
 Optional:
 
 ```bash
 WEBEX_REDIRECT_URI="http://127.0.0.1:8282/callback"
-WEBEX_SCOPES="spark:messages_read spark:rooms_read spark:memberships_read spark:people_read"
+WEBEX_SCOPES="spark:all spark:kms"
 WEBEX_KEYCHAIN_SERVICE="com.example.webex-realtime-events-smoke.$USER"
 WEBEX_REALTIME_RESOURCE="messages"
 WEBEX_REALTIME_EVENT="created"
@@ -68,6 +74,12 @@ WEBEX_REALTIME_PRINT_RAW_UNKNOWN="false"
 `WEBEX_REALTIME_PRINT_RAW_UNKNOWN` accepts the same boolean values. It only prints compact redacted payloads for unknown event or unknown payload decode statuses.
 
 By default, the example stores credentials and refresh-token records under the Keychain service `com.webex.swift-sdk.realtime-events-smoke`.
+
+If device registration fails with HTTP 403 during `registeringDevice`, first
+confirm that the integration has `spark:all` enabled and that the authorization
+URL requested `spark:kms` as well. `spark:kms` is the encrypted-content scope
+Webex includes for integrations; without it the SDK websocket listener can be
+rejected before the socket opens.
 
 ## Suggested Checks
 

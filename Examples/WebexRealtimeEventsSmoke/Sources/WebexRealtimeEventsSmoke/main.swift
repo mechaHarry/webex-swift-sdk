@@ -89,7 +89,7 @@ struct WebexRealtimeEventsSmoke {
             throw RealtimeSmokeError.invalidRedirectURI
         }
 
-        let scopes = (environment["WEBEX_SCOPES"] ?? "spark:messages_read spark:rooms_read spark:memberships_read spark:people_read")
+        let scopes = (environment["WEBEX_SCOPES"] ?? "spark:all spark:kms")
             .split(whereSeparator: { $0.isWhitespace || $0 == "," })
             .map(String.init)
 

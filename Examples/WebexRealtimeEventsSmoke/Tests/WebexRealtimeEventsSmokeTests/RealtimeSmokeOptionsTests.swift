@@ -3,6 +3,15 @@ import WebexSwiftSDK
 @testable import WebexRealtimeEventsSmoke
 
 final class RealtimeSmokeOptionsTests: XCTestCase {
+    func testDefaultConfigurationRequestsWebSocketRequiredScopes() throws {
+        let configuration = try WebexRealtimeEventsSmoke.configurationFromEnvironment([
+            "WEBEX_CLIENT_ID": "client-id",
+            "WEBEX_CLIENT_SECRET": "client-secret"
+        ])
+
+        XCTAssertEqual(configuration.scopes, ["spark:all", "spark:kms"])
+    }
+
     func testDefaultsUseSDKRealtimeSubscriptionsAndDoNotPrintRawUnknownPayloads() throws {
         let options = try RealtimeSmokeOptions(environment: [:])
 
