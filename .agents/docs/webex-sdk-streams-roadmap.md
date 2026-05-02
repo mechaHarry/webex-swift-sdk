@@ -43,7 +43,6 @@ A Snapshot Stream should be explicit about being stateful:
    - `MembershipsStream`
 3. Research and implement Webex real-time trigger sources:
    - webhooks
-   - event resources
    - websocket or push-style transports, if available and appropriate
 4. Wire real-time triggers into existing streams.
 5. Deprecate or disable cadenced polling once real-time triggers are reliable.
@@ -179,7 +178,6 @@ marketing or docs that call polling-backed streams "real-time".
 Later trigger sources can include:
 
 - webhook invalidation
-- event-resource cursors
 - websocket or other push-style transports
 
 These triggers should notify the stream to refresh or reconcile. They should not

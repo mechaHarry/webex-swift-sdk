@@ -161,6 +161,75 @@ final class WebexSnapshotStreamTests: XCTestCase {
         let firstPageCallCount = await loader.firstPageCallCount
         XCTAssertEqual(firstPageCallCount, 1)
     }
+
+    func testRefreshOnTriggersRefreshesWhenPredicateMatches() async throws {
+        let loader = ControllableStreamPageLoader()
+        let stream = WebexSnapshotStream<StreamTestItem>(
+            id: { $0.id },
+            loadFirstPage: { try await loader.loadFirstPage() },
+            loadNextPage: { try await loader.loadNextPage($0) }
+        )
+        var continuation: AsyncStream<WebexStreamTrigger>.Continuation?
+        let triggers = AsyncStream<WebexStreamTrigger> { streamContinuation in
+            continuation = streamContinuation
+        }
+
+        let triggerTask = stream.refreshOnTriggers(triggers) { trigger in
+            trigger.resource == "messages" && trigger.roomID == "room-id"
+        }
+        continuation?.yield(WebexStreamTrigger(
+            resource: "messages",
+            event: "created",
+            resourceID: "message-id",
+            roomID: "room-id",
+            actorID: "person-id"
+        ))
+
+        while await loader.firstPageCallCount == 0 {
+            await Task.yield()
+        }
+        await loader.succeedFirstPage(items: [.init(id: "message-id", value: "Hello")])
+        while (await stream.currentSnapshot()).revision == 0 {
+            await Task.yield()
+        }
+
+        triggerTask.cancel()
+        continuation?.finish()
+        let firstPageCallCount = await loader.firstPageCallCount
+        let snapshot = await stream.currentSnapshot()
+        XCTAssertEqual(firstPageCallCount, 1)
+        XCTAssertEqual(snapshot.items, [.init(id: "message-id", value: "Hello")])
+    }
+
+    func testRefreshOnTriggersIgnoresNonMatchingTriggers() async throws {
+        let loader = ControllableStreamPageLoader()
+        let stream = WebexSnapshotStream<StreamTestItem>(
+            id: { $0.id },
+            loadFirstPage: { try await loader.loadFirstPage() },
+            loadNextPage: { try await loader.loadNextPage($0) }
+        )
+        var continuation: AsyncStream<WebexStreamTrigger>.Continuation?
+        let triggers = AsyncStream<WebexStreamTrigger> { streamContinuation in
+            continuation = streamContinuation
+        }
+
+        let triggerTask = stream.refreshOnTriggers(triggers) { trigger in
+            trigger.resource == "messages"
+        }
+        continuation?.yield(WebexStreamTrigger(
+            resource: "memberships",
+            event: "created",
+            resourceID: "membership-id",
+            roomID: "room-id",
+            actorID: "person-id"
+        ))
+        await Task.yield()
+
+        triggerTask.cancel()
+        continuation?.finish()
+        let firstPageCallCount = await loader.firstPageCallCount
+        XCTAssertEqual(firstPageCallCount, 0)
+    }
 }
 
 private struct StreamTestItem: Equatable, Sendable {

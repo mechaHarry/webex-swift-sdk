@@ -109,6 +109,29 @@ public final class WebexSnapshotStream<Item: Sendable>: @unchecked Sendable {
     public func loadNextPage() async {
         await state.loadNextPage()
     }
+
+    public func refreshOnTriggers(
+        _ triggers: AsyncStream<WebexStreamTrigger>,
+        where shouldRefresh: @escaping @Sendable (WebexStreamTrigger) -> Bool = { _ in true }
+    ) -> Task<Void, Never> {
+        Task { [weak self] in
+            for await trigger in triggers {
+                guard !Task.isCancelled else {
+                    return
+                }
+
+                guard shouldRefresh(trigger) else {
+                    continue
+                }
+
+                guard let self else {
+                    return
+                }
+
+                await self.refresh()
+            }
+        }
+    }
 }
 
 private actor WebexSnapshotStreamState<Item: Sendable> {
