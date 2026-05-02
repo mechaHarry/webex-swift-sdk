@@ -278,6 +278,11 @@ enum RealtimeSmokeRedactor {
     static func redact(_ value: String) -> String {
         var redacted = value
         redacted = replacing(
+            pattern: #"(?i)("(?:access_token|refresh_token|client_secret|clientSecret|authorization|token|secret)"\s*:\s*)"(?:\\.|[^"\\])*""#,
+            in: redacted,
+            with: #"$1"[REDACTED]""#
+        )
+        redacted = replacing(
             pattern: #"(?i)\b(authorization\s*[:=]\s*bearer\s+)([^\s,;]+)"#,
             in: redacted,
             with: "$1[REDACTED]"

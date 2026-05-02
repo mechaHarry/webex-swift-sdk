@@ -75,4 +75,25 @@ final class RealtimeSmokeOptionsTests: XCTestCase {
         XCTAssertFalse(redacted.contains(#""xyz""#))
         XCTAssertTrue(redacted.contains("normal=value"))
     }
+
+    func testRedactorRemovesJSONEncodedSecretValuesAndKeepsNormalValues() {
+        let raw = #"{"access_token":"abc123","refresh_token":"def456","client_secret":"shh","clientSecret":"camel","authorization":"Bearer hidden","token":"xyz","secret":"top","normal":"value"}"#
+        let redacted = RealtimeSmokeRedactor.redact(raw)
+
+        XCTAssertFalse(redacted.contains("abc123"))
+        XCTAssertFalse(redacted.contains("def456"))
+        XCTAssertFalse(redacted.contains("shh"))
+        XCTAssertFalse(redacted.contains("camel"))
+        XCTAssertFalse(redacted.contains("hidden"))
+        XCTAssertFalse(redacted.contains(#""xyz""#))
+        XCTAssertFalse(redacted.contains("top"))
+        XCTAssertTrue(redacted.contains(#""access_token":"[REDACTED]""#))
+        XCTAssertTrue(redacted.contains(#""refresh_token":"[REDACTED]""#))
+        XCTAssertTrue(redacted.contains(#""client_secret":"[REDACTED]""#))
+        XCTAssertTrue(redacted.contains(#""clientSecret":"[REDACTED]""#))
+        XCTAssertTrue(redacted.contains(#""authorization":"[REDACTED]""#))
+        XCTAssertTrue(redacted.contains(#""token":"[REDACTED]""#))
+        XCTAssertTrue(redacted.contains(#""secret":"[REDACTED]""#))
+        XCTAssertTrue(redacted.contains(#""normal":"value""#))
+    }
 }
