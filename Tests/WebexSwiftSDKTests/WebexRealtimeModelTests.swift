@@ -37,6 +37,22 @@ final class WebexRealtimeModelTests: XCTestCase {
         XCTAssertEqual(trigger.actorID, "actor-id")
     }
 
+    func testRealtimeEventAllowsMissingID() {
+        let event = WebexRealtimeEvent(
+            resource: "futureResource",
+            event: "renamed",
+            decodeStatus: .unknownEvent,
+            payload: ["value": .string("raw")]
+        )
+
+        XCTAssertNil(event.id)
+        XCTAssertEqual(event.resource, "futureResource")
+        XCTAssertEqual(event.event, "renamed")
+        XCTAssertEqual(event.knownResource, .unknown("futureResource"))
+        XCTAssertEqual(event.knownEvent, .unknown("renamed"))
+        XCTAssertEqual(event.payload, ["value": .string("raw")])
+    }
+
     func testDefaultOptionsExcludeSeenEvents() {
         let options = WebexRealtimeOptions(resources: [.messages, .memberships])
 

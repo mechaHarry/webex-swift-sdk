@@ -119,7 +119,7 @@ public struct WebexRealtimeOptions: Sendable {
 }
 
 public struct WebexRealtimeEvent: Equatable, Sendable {
-    public let id: String
+    public let id: String?
     public let resource: String
     public let event: String
     public let knownResource: WebexRealtimeResource
@@ -132,7 +132,7 @@ public struct WebexRealtimeEvent: Equatable, Sendable {
     public let payload: [String: WebexJSONValue]
 
     public init(
-        id: String,
+        id: String? = nil,
         resource: String,
         event: String,
         knownResource: WebexRealtimeResource? = nil,
