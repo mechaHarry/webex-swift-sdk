@@ -61,25 +61,13 @@ internal struct WebexMercuryDeviceService: Sendable {
 
         let wdmURL = try await discoverWDMURL()
         let devicesURL = try devicesURL(from: wdmURL)
-        let devices = try await sendJSON(
-            DeviceListResponse.self,
-            request: makeRequest(url: devicesURL),
-            operation: "WDM device list"
+        let body = DeviceCreateRequest(deviceName: options.deviceName)
+        let selectedDevice = try await sendJSON(
+            DeviceResponse.self,
+            request: makeRequest(url: devicesURL, method: "POST", body: JSONEncoder().encode(body)),
+            operation: "WDM device create"
         )
-            .deviceList
-
-        let selectedDevice: WebexMercuryDevice
-        if let existing = devices.first(where: { $0.name == options.deviceName }) {
-            selectedDevice = try existing.webexMercuryDevice()
-        } else {
-            let body = DeviceCreateRequest(deviceName: options.deviceName)
-            selectedDevice = try await sendJSON(
-                DeviceResponse.self,
-                request: makeRequest(url: devicesURL, method: "POST", body: JSONEncoder().encode(body)),
-                operation: "WDM device create"
-            )
-            .webexMercuryDevice()
-        }
+        .webexMercuryDevice()
 
         await cache.save(selectedDevice)
         return selectedDevice
@@ -325,24 +313,6 @@ private struct U2CCatalogResponse: Decodable {
 
     struct ServiceLinks: Decodable {
         let wdm: String
-    }
-}
-
-private struct DeviceListResponse: Decodable {
-    let deviceList: [DeviceResponse]
-
-    init(from decoder: Decoder) throws {
-        if let devices = try? [DeviceResponse](from: decoder) {
-            self.deviceList = devices
-            return
-        }
-
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.deviceList = try container.decode([DeviceResponse].self, forKey: .devices)
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case devices
     }
 }
 

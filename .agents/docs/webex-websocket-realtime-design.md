@@ -47,7 +47,8 @@ Components:
   - Emits lifecycle states: disconnected, discovering, registering device, connecting, authorizing, connected, reconnecting, failed.
 - `WebexMercuryDeviceService`
   - Discovers WDM through U2C.
-  - Lists/reuses or creates an SDK-owned Webex device.
+  - Reuses an in-memory SDK-owned device while valid.
+  - Creates/registers a WDM device directly when no cached device is valid.
 - `WebexMercuryWebSocketSession`
   - Owns the `URLSessionWebSocketTask`, authorization frame, receive loop, ack frames, and cancellation.
 - `WebexRealtimeTriggerAdapter`
@@ -62,8 +63,8 @@ Startup flow:
 1. App calls `client.realtime.connect(options:)`.
 2. Realtime client asks the existing token manager for a fresh access token.
 3. Device service calls the U2C catalog endpoint and extracts the WDM service URL.
-4. Device service lists existing devices and reuses a matching SDK-owned device when possible.
-5. If no usable device exists, device service creates one with a desktop/native SDK identity.
+4. Device service reuses its in-memory cached device if it matches the requested device name.
+5. If no usable cached device exists, device service creates one with a desktop/native SDK identity.
 6. Device service returns the WDM-provided `webSocketUrl`.
 7. WebSocket session connects to the `wss://` URL with `URLSessionWebSocketTask`.
 8. After connection, session sends an authorization frame:
@@ -272,7 +273,7 @@ Unit tests will cover:
 
 - U2C catalog parsing.
 - WDM service URL extraction.
-- WDM device list reuse.
+- In-memory WDM device reuse.
 - WDM device creation request shape.
 - Stale device 404 handling.
 - WebSocket authorization frame encoding.

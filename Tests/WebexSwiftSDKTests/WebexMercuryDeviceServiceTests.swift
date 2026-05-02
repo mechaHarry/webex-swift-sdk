@@ -2,7 +2,7 @@ import XCTest
 @testable import WebexSwiftSDK
 
 final class WebexMercuryDeviceServiceTests: XCTestCase {
-    func testDiscoversWDMAndReusesMatchingDevice() async throws {
+    func testDiscoversWDMRegistersDeviceAndReusesCachedDevice() async throws {
         let httpClient = MockMercuryDeviceHTTPClient()
         await httpClient.enqueue(response: httpResponse(
             url: URL(string: "https://u2c.wbx2.com/u2c/api/v1/catalog?format=hostmap")!,
@@ -11,15 +11,18 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
         ))
         await httpClient.enqueue(response: httpResponse(
             url: URL(string: "https://wdm.example.com/wdm/api/v1/devices")!,
-            statusCode: 200,
-            body: #"{"devices":[{"id":"other","name":"other","webSocketUrl":"wss://other.example.com"},{"id":"device-1","name":"desk","webSocketUrl":"wss://mercury.example.com"}]}"#
+            statusCode: 201,
+            body: #"{"id":"device-1","name":"desk","webSocketUrl":"wss://mercury.example.com"}"#
         ))
         let service = makeService(httpClient: httpClient)
 
         let device = try await service.device(options: WebexRealtimeOptions(deviceName: "desk"))
+        let cachedDevice = try await service.device(options: WebexRealtimeOptions(deviceName: "desk"))
 
         XCTAssertEqual(device, WebexMercuryDevice(id: "device-1", name: "desk", webSocketURL: URL(string: "wss://mercury.example.com")!))
+        XCTAssertEqual(cachedDevice, device)
         let requests = await httpClient.recordedRequests()
+        XCTAssertEqual(requests.map(\.httpMethod), ["GET", "POST"])
         XCTAssertEqual(requests.map(\.url?.absoluteString), [
             "https://u2c.wbx2.com/u2c/api/v1/catalog?format=hostmap",
             "https://wdm.example.com/wdm/api/v1/devices"
@@ -37,8 +40,37 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
         ))
         await httpClient.enqueue(response: httpResponse(
             url: URL(string: "https://wdm.example.com/wdm/api/v1/devices")!,
+            statusCode: 201,
+            body: #"{"id":"device-2","name":"desk","webSocketUrl":"wss://created.example.com"}"#
+        ))
+        let service = makeService(httpClient: httpClient)
+
+        let device = try await service.device(options: WebexRealtimeOptions(deviceName: "desk"))
+
+        XCTAssertEqual(device.id, "device-2")
+        let requests = await httpClient.recordedRequests()
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[1].httpMethod, "POST")
+        XCTAssertEqual(requests[1].url?.absoluteString, "https://wdm.example.com/wdm/api/v1/devices")
+        XCTAssertEqual(requests[1].value(forHTTPHeaderField: "Content-Type"), "application/json")
+
+        let body = try XCTUnwrap(requests[1].httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(json["deviceName"], "desk")
+        XCTAssertEqual(json["deviceType"], "DESKTOP")
+        XCTAssertEqual(json["localizedModel"], "Swift")
+        XCTAssertEqual(json["model"], "webex-swift-sdk")
+        XCTAssertEqual(json["name"], "desk")
+        XCTAssertEqual(json["systemName"], "webex-swift-sdk")
+        XCTAssertEqual(json["systemVersion"], "0.1")
+    }
+
+    func testRegistersDeviceWithoutListingDevicesFirst() async throws {
+        let httpClient = MockMercuryDeviceHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            url: URL(string: "https://u2c.wbx2.com/u2c/api/v1/catalog?format=hostmap")!,
             statusCode: 200,
-            body: #"{"devices":[]}"#
+            body: #"{"serviceLinks":{"wdm":"https://wdm.example.com/wdm/api/v1"}}"#
         ))
         await httpClient.enqueue(response: httpResponse(
             url: URL(string: "https://wdm.example.com/wdm/api/v1/devices")!,
@@ -51,20 +83,11 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
 
         XCTAssertEqual(device.id, "device-2")
         let requests = await httpClient.recordedRequests()
-        XCTAssertEqual(requests.count, 3)
-        XCTAssertEqual(requests[2].httpMethod, "POST")
-        XCTAssertEqual(requests[2].url?.absoluteString, "https://wdm.example.com/wdm/api/v1/devices")
-        XCTAssertEqual(requests[2].value(forHTTPHeaderField: "Content-Type"), "application/json")
-
-        let body = try XCTUnwrap(requests[2].httpBody)
-        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
-        XCTAssertEqual(json["deviceName"], "desk")
-        XCTAssertEqual(json["deviceType"], "DESKTOP")
-        XCTAssertEqual(json["localizedModel"], "Swift")
-        XCTAssertEqual(json["model"], "webex-swift-sdk")
-        XCTAssertEqual(json["name"], "desk")
-        XCTAssertEqual(json["systemName"], "webex-swift-sdk")
-        XCTAssertEqual(json["systemVersion"], "0.1")
+        XCTAssertEqual(requests.map(\.httpMethod), ["GET", "POST"])
+        XCTAssertEqual(requests.map(\.url?.absoluteString), [
+            "https://u2c.wbx2.com/u2c/api/v1/catalog?format=hostmap",
+            "https://wdm.example.com/wdm/api/v1/devices"
+        ])
     }
 
     func testRejectsNonWSSWebSocketURL() async throws {
@@ -76,8 +99,8 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
         ))
         await httpClient.enqueue(response: httpResponse(
             url: URL(string: "https://wdm.example.com/wdm/api/v1/devices")!,
-            statusCode: 200,
-            body: #"{"devices":[{"id":"unsafe","name":"desk","webSocketUrl":"ws://unsafe.example.com/token=secret"}]}"#
+            statusCode: 201,
+            body: #"{"id":"unsafe","name":"desk","webSocketUrl":"ws://unsafe.example.com/token=secret"}"#
         ))
         let service = makeService(httpClient: httpClient)
 
@@ -114,8 +137,8 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
         ))
         await httpClient.enqueue(response: httpResponse(
             url: URL(string: "https://wdm.example.com/wdm/api/v1/devices")!,
-            statusCode: 200,
-            body: #"{"devices":[{"id":"device-1","name":"desk-one","webSocketUrl":"wss://one.example.com"}]}"#
+            statusCode: 201,
+            body: #"{"id":"device-1","name":"desk-one","webSocketUrl":"wss://one.example.com"}"#
         ))
         await httpClient.enqueue(response: httpResponse(
             url: URL(string: "https://u2c.wbx2.com/u2c/api/v1/catalog?format=hostmap")!,
@@ -124,8 +147,8 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
         ))
         await httpClient.enqueue(response: httpResponse(
             url: URL(string: "https://wdm.example.com/wdm/api/v1/devices")!,
-            statusCode: 200,
-            body: #"{"devices":[{"id":"device-2","name":"desk-two","webSocketUrl":"wss://two.example.com"}]}"#
+            statusCode: 201,
+            body: #"{"id":"device-2","name":"desk-two","webSocketUrl":"wss://two.example.com"}"#
         ))
         let service = makeService(httpClient: httpClient)
 
@@ -176,8 +199,8 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
         ))
         await httpClient.enqueue(response: httpResponse(
             url: URL(string: "https://wdm.example.com/wdm/api/v1/devices")!,
-            statusCode: 200,
-            body: #"{"devices":[{"id":"device-1","name":"desk","webSocketUrl":"wss://mercury.example.com"}]}"#
+            statusCode: 201,
+            body: #"{"id":"device-1","name":"desk","webSocketUrl":"wss://mercury.example.com"}"#
         ))
         let service = makeService(httpClient: httpClient, sleeper: { delay in
             await sleeper.record(delay)
@@ -196,7 +219,7 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
         ])
     }
 
-    func testWDMDeviceListFailureIdentifiesOperation() async throws {
+    func testWDMDeviceCreateFailureIdentifiesOperation() async throws {
         let httpClient = MockMercuryDeviceHTTPClient()
         await httpClient.enqueue(response: httpResponse(
             url: URL(string: "https://u2c.wbx2.com/u2c/api/v1/catalog?format=hostmap")!,
@@ -213,7 +236,7 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
 
         do {
             _ = try await service.device(options: WebexRealtimeOptions(deviceName: "desk"))
-            XCTFail("Expected WDM device list error")
+            XCTFail("Expected WDM device create error")
         } catch let error as WebexSDKError {
             guard case .webexAPI(let statusCode, let trackingID, let message) = error else {
                 XCTFail("Expected webexAPI error, got \(error)")
@@ -222,7 +245,7 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
 
             XCTAssertEqual(statusCode, 403)
             XCTAssertEqual(trackingID, "ROUTERGW_test")
-            XCTAssertTrue(message.contains("WDM device list"), message)
+            XCTAssertTrue(message.contains("WDM device create"), message)
             XCTAssertFalse(message.contains("realtime-token"))
             XCTAssertFalse(message.contains("wdm.example.com"))
         }

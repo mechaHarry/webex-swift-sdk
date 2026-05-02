@@ -4,7 +4,7 @@
 
 **Goal:** Build native Swift receive-only Webex WebSocket realtime support that emits rich events and Snapshot Stream refresh triggers.
 
-**Architecture:** Add a `Realtime` slice beside REST API clients. The slice discovers WDM through U2C, registers or reuses an SDK-owned device, connects with `URLSessionWebSocketTask`, decodes incoming frames into `WebexRealtimeEvent`, and maps them into `WebexStreamTrigger`. REST remains the canonical write/detail path.
+**Architecture:** Add a `Realtime` slice beside REST API clients. The slice discovers WDM through U2C, reuses an in-memory SDK-owned device while valid, directly registers a new WDM device when needed, connects with `URLSessionWebSocketTask`, decodes incoming frames into `WebexRealtimeEvent`, and maps them into `WebexStreamTrigger`. REST remains the canonical write/detail path.
 
 **Tech Stack:** Swift 5.9, Foundation `URLSession`, `URLSessionWebSocketTask`, `AsyncStream`, XCTest, existing `HTTPClient`, `RetryPolicy`, `TokenManager`, `WebexJSONValue`, and Snapshot Streams.
 
@@ -17,7 +17,7 @@ Create:
 - `Sources/WebexSwiftSDK/Realtime/WebexRealtimeModels.swift`
   - Public realtime options, resources, events, decode status, connection state, and event value.
 - `Sources/WebexSwiftSDK/Realtime/WebexMercuryDeviceService.swift`
-  - Internal U2C/WDM discovery, device list/reuse/create, and stale-device invalidation.
+  - Internal U2C/WDM discovery, in-memory device reuse, direct device creation, and stale-device invalidation.
 - `Sources/WebexSwiftSDK/Realtime/WebexRealtimeWebSocketTransport.swift`
   - Internal mockable WebSocket transport protocol and Foundation adapter.
 - `Sources/WebexSwiftSDK/Realtime/WebexMercuryWebSocketSession.swift`
@@ -469,15 +469,11 @@ internal struct WebexMercuryDeviceService: Sendable {
     }
 
     func device(options: WebexRealtimeOptions) async throws -> WebexMercuryDevice {
-        if let cached = await cache.load() {
+        if let cached = await cache.load(), cached.name == options.deviceName {
             return cached
         }
+
         let wdmURL = try await discoverWDMURL()
-        let devices = try await listDevices(wdmURL: wdmURL)
-        if let existing = devices.first(where: { $0.name == options.deviceName }) {
-            await cache.save(existing)
-            return existing
-        }
         let created = try await createDevice(wdmURL: wdmURL, options: options)
         await cache.save(created)
         return created
@@ -492,7 +488,8 @@ internal struct WebexMercuryDeviceService: Sendable {
 Implement the private helpers in the same file:
 
 - `discoverWDMURL()` builds `u2cURL?format=hostmap`.
-- `listDevices(wdmURL:)` sends `GET <wdm>/devices`.
+- Avoid `GET <wdm>/devices` in the default path; OAuth integration tokens may be allowed to register devices without being allowed to list all devices.
+- In-memory cache reuse is scoped to the live `WebexClient`.
 - `createDevice(wdmURL:options:)` sends `POST <wdm>/devices` with JSON fields `deviceName`, `deviceType`, `localizedModel`, `model`, `name`, `systemName`, `systemVersion`.
 - `sendWithRetry(_:)` uses `retryPolicy`, retries transient network errors, 429, and 5xx, and respects `Retry-After`.
 - `authorizedRequest(url:method:body:)` injects `Authorization: Bearer <token>`, `Accept: application/json`, and JSON content type for bodies.
