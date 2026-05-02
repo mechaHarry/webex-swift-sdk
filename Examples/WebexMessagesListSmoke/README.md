@@ -12,6 +12,7 @@ This example:
 - creates `WebexClient` with the initial access token in memory
 - calls `messages.list(params:)` for `WEBEX_ROOM_ID`
 - follows `page.nextPage` only up to the explicit page cap
+- exits successfully when the cap is reached and prints `hasMore: true`
 - prints returned message metadata and bounded content previews
 
 ## Run
@@ -49,8 +50,10 @@ WEBEX_MESSAGES_BEFORE="2026-05-01T00:00:00Z"
 WEBEX_MESSAGES_BEFORE_MESSAGE="message-id"
 ```
 
-If the smoke reports `Messages smoke page cap exceeded`, increase
-`WEBEX_MESSAGES_MAX_PAGES` or narrow the listing with the filters above.
+The default page cap is one page so active rooms do not accidentally dump large
+message histories. If the smoke prints `hasMore: true`, increase
+`WEBEX_MESSAGES_MAX_PAGES` to fetch older pages or narrow the listing with the
+filters above.
 
 If your Webex integration uses a different registered loopback URI, override it with:
 

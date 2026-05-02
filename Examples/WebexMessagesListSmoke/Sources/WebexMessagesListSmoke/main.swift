@@ -10,10 +10,6 @@ struct WebexMessagesListSmoke {
         } catch is CancellationError {
             fputs("Cancelled.\n", stderr)
             Foundation.exit(130)
-        } catch WebexSDKError.network(let message) where message == "Messages smoke page cap exceeded" {
-            fputs("Messages list smoke failed: \(message).\n", stderr)
-            fputs("Increase WEBEX_MESSAGES_MAX_PAGES or narrow the listing with WEBEX_MESSAGES_BEFORE / WEBEX_MESSAGES_BEFORE_MESSAGE.\n", stderr)
-            Foundation.exit(1)
         } catch {
             fputs("Messages list smoke failed: \(failureDescription(for: error))\n", stderr)
             Foundation.exit(1)
@@ -51,13 +47,20 @@ struct WebexMessagesListSmoke {
         print("pageSize: \(listOptions.pageSize)")
         print("maxPages: \(listOptions.maxPages)")
 
-        let messages = try await collectMessages(
+        let result = try await collectMessages(
             client: authorized.client,
             params: listOptions.params,
             maxPages: listOptions.maxPages
         )
 
+        let messages = result.messages
         print("messages.count: \(messages.count)")
+        print("pagesFetched: \(result.pagesFetched)")
+        print("hasMore: \(result.hasMore)")
+        if result.hasMore {
+            print("Reached WEBEX_MESSAGES_MAX_PAGES before all pages were fetched. Increase WEBEX_MESSAGES_MAX_PAGES to fetch more pages.")
+        }
+
         for (index, message) in messages.enumerated() {
             print("")
             print("message[\(index)]")
@@ -150,18 +153,22 @@ struct WebexMessagesListSmoke {
         return String(normalized.prefix(limit)) + "..."
     }
 
-    private static func collectMessages(
+    static func collectMessages(
         client: WebexClient,
         params: ListMessagesParams,
         maxPages: Int
-    ) async throws -> [WebexMessage] {
+    ) async throws -> MessageCollectionResult {
         var page = try await client.messages.list(params: params)
         var messages = page.items
         var pagesFetched = 1
 
         while let nextPage = page.nextPage {
             guard pagesFetched < maxPages else {
-                throw WebexSDKError.network("Messages smoke page cap exceeded")
+                return MessageCollectionResult(
+                    messages: messages,
+                    pagesFetched: pagesFetched,
+                    hasMore: true
+                )
             }
 
             page = try await client.messages.list(nextPage: nextPage)
@@ -169,8 +176,18 @@ struct WebexMessagesListSmoke {
             pagesFetched += 1
         }
 
-        return messages
+        return MessageCollectionResult(
+            messages: messages,
+            pagesFetched: pagesFetched,
+            hasMore: false
+        )
     }
+}
+
+struct MessageCollectionResult: Equatable {
+    let messages: [WebexMessage]
+    let pagesFetched: Int
+    let hasMore: Bool
 }
 
 private func requiredEnvironment(

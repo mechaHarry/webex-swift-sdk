@@ -76,4 +76,115 @@ final class ListOptionsTests: XCTestCase {
         XCTAssertFalse(description.contains("code="))
         XCTAssertFalse(description.contains("state="))
     }
+
+    func testCollectMessagesStopsAtPageCapWithoutFailingWhenMorePagesExist() async throws {
+        let httpClient = MockMessagesSmokeHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            headers: ["Link": #"<https://webexapis.com/v1/messages?cursor=next>; rel="next""#],
+            body: #"{"items":[{"id":"message-1","roomId":"room-id"}]}"#
+        ))
+        let client = makeClient(httpClient: httpClient)
+
+        let result = try await WebexMessagesListSmoke.collectMessages(
+            client: client,
+            params: .init(roomID: "room-id", max: 25),
+            maxPages: 1
+        )
+
+        XCTAssertEqual(result.messages.map(\.id), ["message-1"])
+        XCTAssertEqual(result.pagesFetched, 1)
+        XCTAssertTrue(result.hasMore)
+        let requests = await httpClient.recordedRequests()
+        XCTAssertEqual(requests.map { $0.url?.absoluteString }, [
+            "https://webexapis.com/v1/messages?roomId=room-id&max=25"
+        ])
+    }
+
+    func testCollectMessagesFollowsNextPageUntilCap() async throws {
+        let httpClient = MockMessagesSmokeHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            headers: ["Link": #"<https://webexapis.com/v1/messages?cursor=next>; rel="next""#],
+            body: #"{"items":[{"id":"message-1","roomId":"room-id"}]}"#
+        ))
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            body: #"{"items":[{"id":"message-2","roomId":"room-id"}]}"#
+        ))
+        let client = makeClient(httpClient: httpClient)
+
+        let result = try await WebexMessagesListSmoke.collectMessages(
+            client: client,
+            params: .init(roomID: "room-id", max: 25),
+            maxPages: 2
+        )
+
+        XCTAssertEqual(result.messages.map(\.id), ["message-1", "message-2"])
+        XCTAssertEqual(result.pagesFetched, 2)
+        XCTAssertFalse(result.hasMore)
+        let requests = await httpClient.recordedRequests()
+        XCTAssertEqual(requests.map { $0.url?.absoluteString }, [
+            "https://webexapis.com/v1/messages?roomId=room-id&max=25",
+            "https://webexapis.com/v1/messages?cursor=next"
+        ])
+    }
+}
+
+private func makeClient(httpClient: HTTPClient) -> WebexClient {
+    WebexClient(
+        accountID: WebexAccountID(),
+        configuration: WebexIntegrationConfiguration(
+            clientID: "client",
+            clientSecret: "secret",
+            redirectURI: URL(string: "myapp://oauth/webex")!,
+            scopes: ["spark:messages_read"]
+        ),
+        tokenStore: InMemoryWebexStore(),
+        httpClient: httpClient,
+        initialAccessToken: AccessTokenState(
+            value: "messages-smoke-token",
+            expiresAt: Date(timeIntervalSince1970: 1_000),
+            tokenType: "Bearer"
+        ),
+        clock: { Date(timeIntervalSince1970: 0) }
+    )
+}
+
+private func httpResponse(
+    statusCode: Int,
+    headers: [String: String] = [:],
+    body: String
+) -> HTTPResponse {
+    HTTPResponse(
+        data: Data(body.utf8),
+        response: HTTPURLResponse(
+            url: URL(string: "https://webexapis.com/v1/messages")!,
+            statusCode: statusCode,
+            httpVersion: "HTTP/1.1",
+            headerFields: headers
+        )!
+    )
+}
+
+private actor MockMessagesSmokeHTTPClient: HTTPClient {
+    private var responses: [HTTPResponse] = []
+    private var requests: [URLRequest] = []
+
+    func enqueue(response: HTTPResponse) {
+        responses.append(response)
+    }
+
+    func recordedRequests() -> [URLRequest] {
+        requests
+    }
+
+    func send(_ request: URLRequest) async throws -> HTTPResponse {
+        requests.append(request)
+        guard !responses.isEmpty else {
+            throw WebexSDKError.network("Unexpected messages smoke request")
+        }
+
+        return responses.removeFirst()
+    }
 }
