@@ -15,6 +15,7 @@ This package provides the OAuth and authenticated REST foundation:
 - coordinated token refresh
 - authenticated REST transport
 - typed People, Spaces, Memberships, and Messages APIs
+- snapshot streams for Spaces, Memberships, and Messages
 
 ## Example
 
@@ -32,6 +33,39 @@ for account in accounts {
 ```
 
 The host macOS app owns UI, account selection, and window-to-account routing. The SDK owns OAuth, token lifecycle, local secure storage, and authenticated Webex REST execution.
+
+## Snapshot Streams
+
+Snapshot streams are a stateful SDK layer over the wire-faithful REST APIs. They
+keep the previous snapshot visible while a refresh or next-page load is running,
+then emit a reconciled snapshot when the SDK has new data. They are not
+documented as real-time streams until Webex push/event triggers are implemented.
+
+```swift
+let stream = client.spaces.stream(
+    params: .init(sortBy: .lastActivity, max: 20),
+    pageLimit: 5
+)
+
+Task {
+    for await snapshot in stream.snapshots {
+        print(snapshot.items.map(\.title))
+        print("refreshing:", snapshot.isRefreshing)
+        print("has more:", snapshot.pagination.hasMore)
+    }
+}
+
+await stream.refresh()
+
+let snapshot = await stream.currentSnapshot()
+if snapshot.pagination.hasMore, !snapshot.pagination.capReached {
+    await stream.loadNextPage()
+}
+```
+
+The `max` parameter remains the Webex REST page size. The stream `pageLimit`
+is only a local safety cap for how many pages explicit `loadNextPage()` calls
+may accumulate before the stream reports `pagination.capReached`.
 
 ## Spaces
 

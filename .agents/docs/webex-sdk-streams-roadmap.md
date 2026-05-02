@@ -55,6 +55,19 @@ A Snapshot Stream should be explicit about being stateful:
 
 ## Stream Contract
 
+Initial implementation status:
+
+- `WebexSnapshotStream<Item>` owns local state and subscription fanout.
+- `WebexStreamSnapshot<Item>` exposes items, revision, loading flags, last
+  update time, last error, and pagination metadata.
+- `WebexStreamPagination` exposes `hasMore`, `nextPage`, `pagesLoaded`,
+  `pageLimit`, and `capReached`.
+- `SpacesAPI.stream(params:pageLimit:)`, `MessagesAPI.stream(params:pageLimit:)`,
+  and `MembershipsAPI.stream(params:pageLimit:)` adapt the existing endpoint
+  wrappers without bypassing `WebexTransport`.
+- Streams currently support explicit `refresh()` and `loadNextPage()` only.
+  They are snapshot/state streams, not real-time streams.
+
 A stream should expose immutable snapshots. The app/UI subscribes to snapshots
 and redraws when a new snapshot is emitted.
 
