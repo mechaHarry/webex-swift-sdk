@@ -181,7 +181,7 @@ The SDK has experimental native Swift WebSocket realtime support. The public
 entry point is:
 
 ```swift
-let connection = try await client.realtime.connect(options: options)
+let connection = client.realtime.connect(options: options)
 ```
 
 `WebexRealtimeConnection` exposes:
@@ -235,7 +235,7 @@ object. Native WebSocket connections can provide the same trigger shape through
 `AsyncStream<WebexStreamTrigger>` and a predicate:
 
 ```swift
-let connection = try await client.realtime.connect(options: options)
+let connection = client.realtime.connect(options: options)
 
 let task = messagesStream.refreshOnTriggers(connection.triggers) { trigger in
     trigger.resource == "messages" && trigger.roomID == selectedRoomID
