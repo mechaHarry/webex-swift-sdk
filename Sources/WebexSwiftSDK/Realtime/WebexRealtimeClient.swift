@@ -149,16 +149,90 @@ internal final class WebexRealtimeLiveConnectionSource: WebexRealtimeConnectionS
     }
 
     private func run() async {
+        let deviceService = deviceServiceFactory(
+            httpClient,
+            accessTokenProvider,
+            options.retryPolicy,
+            sleeper
+        )
+        var retryAttempt = 1
+        var staleDeviceRefreshAttempts = 0
+        var didInvalidateToken = false
+
+        while true {
+            do {
+                try await connectOnce(deviceService: deviceService)
+                streamState.finish()
+                return
+            } catch is CancellationError {
+                streamState.finish()
+                return
+            } catch let error as WebexSDKError {
+                streamState.cancelActiveConnection()
+
+                if isStaleDevice(error: error), staleDeviceRefreshAttempts < 3 {
+                    staleDeviceRefreshAttempts += 1
+                    await deviceService.invalidateCachedDevice()
+                    continue
+                }
+
+                if isAuthFailure(error: error), !didInvalidateToken {
+                    didInvalidateToken = true
+                    await tokenInvalidator()
+                    continue
+                }
+
+                guard shouldRetryConnection(error: error, attempt: retryAttempt) else {
+                    streamState.yield(.failed(error))
+                    streamState.finish()
+                    return
+                }
+
+                let delay = retryDelay(for: error, attempt: retryAttempt)
+                streamState.yield(.reconnecting(attempt: retryAttempt, delay: delay))
+                do {
+                    try await sleeper(delay)
+                } catch is CancellationError {
+                    streamState.finish()
+                    return
+                } catch {
+                    streamState.yield(.failed(.network("Realtime reconnect sleep failed: \(Redactor.redactSecrets(error.localizedDescription))")))
+                    streamState.finish()
+                    return
+                }
+                retryAttempt += 1
+            } catch {
+                streamState.cancelActiveConnection()
+                let sdkError = WebexSDKError.network("Webex realtime connection failed: \(Redactor.redactSecrets(error.localizedDescription))")
+
+                guard shouldRetryConnection(error: sdkError, attempt: retryAttempt) else {
+                    streamState.yield(.failed(sdkError))
+                    streamState.finish()
+                    return
+                }
+
+                let delay = retryDelay(for: sdkError, attempt: retryAttempt)
+                streamState.yield(.reconnecting(attempt: retryAttempt, delay: delay))
+                do {
+                    try await sleeper(delay)
+                } catch is CancellationError {
+                    streamState.finish()
+                    return
+                } catch {
+                    streamState.yield(.failed(.network("Realtime reconnect sleep failed: \(Redactor.redactSecrets(error.localizedDescription))")))
+                    streamState.finish()
+                    return
+                }
+                retryAttempt += 1
+            }
+        }
+    }
+
+    private func connectOnce(deviceService: WebexMercuryDeviceProviding) async throws {
         do {
             try Task.checkCancellation()
             streamState.yield(.discovering)
 
-            let deviceService = deviceServiceFactory(
-                httpClient,
-                accessTokenProvider,
-                options.retryPolicy,
-                sleeper
-            )
             streamState.yield(.registeringDevice)
             let device = try await deviceService.device(options: options)
 
@@ -185,43 +259,74 @@ internal final class WebexRealtimeLiveConnectionSource: WebexRealtimeConnectionS
                     try await session.ack(messageID: ackID)
                 }
             }
-
-            streamState.finish()
         } catch is CancellationError {
-            streamState.finish()
+            throw CancellationError()
         } catch let error as WebexSDKError {
-            await invalidateTokenIfNeeded(for: error)
-            streamState.yield(.failed(error))
-            streamState.finish()
+            throw error
         } catch {
-            streamState.yield(.failed(.network("Webex realtime connection failed: \(Redactor.redactSecrets(error.localizedDescription))")))
-            streamState.finish()
+            throw WebexSDKError.network("Webex realtime connection failed: \(Redactor.redactSecrets(error.localizedDescription))")
         }
     }
 
-    private func invalidateTokenIfNeeded(for error: WebexSDKError) async {
+    private func shouldRetryConnection(error: WebexSDKError, attempt: Int) -> Bool {
+        guard attempt < options.retryPolicy.maxAttempts else {
+            return false
+        }
+
+        if case .network = error {
+            return true
+        }
+
         switch error.apiErrorKind {
-        case .unauthorized, .forbidden:
-            await tokenInvalidator()
+        case .rateLimited, .locked, .serverError:
+            return true
         case .badRequest,
+             .unauthorized,
+             .forbidden,
              .notFound,
              .methodNotAllowed,
              .conflict,
              .gone,
              .unsupportedMediaType,
-             .locked,
              .preconditionRequired,
-             .rateLimited,
+             .unexpected,
+             nil:
+            return false
+        }
+    }
+
+    private func retryDelay(for error: WebexSDKError, attempt: Int) -> TimeInterval {
+        switch error.apiErrorKind {
+        case .rateLimited(let retryAfter), .locked(let retryAfter):
+            return retryAfter ?? options.retryPolicy.delay(forAttempt: attempt)
+        case .badRequest,
+             .unauthorized,
+             .forbidden,
+             .notFound,
+             .methodNotAllowed,
+             .conflict,
+             .gone,
+             .unsupportedMediaType,
+             .preconditionRequired,
              .serverError,
              .unexpected,
              nil:
-            return
+            return options.retryPolicy.delay(forAttempt: attempt)
         }
+    }
+
+    private func isStaleDevice(error: WebexSDKError) -> Bool {
+        error.apiErrorKind == .notFound
+    }
+
+    private func isAuthFailure(error: WebexSDKError) -> Bool {
+        error.apiErrorKind == .unauthorized || error.apiErrorKind == .forbidden
     }
 }
 
 internal protocol WebexMercuryDeviceProviding: Sendable {
     func device(options: WebexRealtimeOptions) async throws -> WebexMercuryDevice
+    func invalidateCachedDevice() async
 }
 
 extension WebexMercuryDeviceService: WebexMercuryDeviceProviding {}
@@ -267,6 +372,17 @@ private final class WebexRealtimeLiveConnectionStreamState: @unchecked Sendable 
             activeWebSocket = webSocket
             activeSession = session
         }
+    }
+
+    func cancelActiveConnection() {
+        let snapshot = lock.withLock {
+            let snapshot = (activeSession, activeWebSocket)
+            activeSession = nil
+            activeWebSocket = nil
+            return snapshot
+        }
+        snapshot.0?.cancel()
+        snapshot.1?.cancel()
     }
 
     func yield(_ event: WebexRealtimeEvent) {
