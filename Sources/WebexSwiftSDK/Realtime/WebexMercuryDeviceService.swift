@@ -78,30 +78,91 @@ internal struct WebexMercuryDeviceService: Sendable {
     }
 
     private func discoverWDMURL() async throws -> URL {
-        guard var components = URLComponents(url: u2cURL, resolvingAgainstBaseURL: false) else {
+        let limitedCatalog = try await sendJSON(
+            U2CCatalogResponse.self,
+            request: makeRequest(url: limitedCatalogURL()),
+            operation: "U2C limited catalog",
+            requiresAuthorization: false
+        )
+
+        do {
+            let postauthCatalog = try await sendJSON(
+                U2CCatalogResponse.self,
+                request: makeRequest(url: postauthCatalogURL(from: limitedCatalog)),
+                operation: "U2C catalog"
+            )
+            return try serviceURL(named: "wdm", in: postauthCatalog, errorName: "WDM")
+        } catch {
+            guard shouldUseLimitedCatalog(after: error) else {
+                throw error
+            }
+
+            return try serviceURL(named: "wdm", in: limitedCatalog, errorName: "WDM")
+        }
+    }
+
+    private func limitedCatalogURL() throws -> URL {
+        try catalogURL(
+            from: u2cURL,
+            path: "limited/catalog",
+            queryItems: [
+                URLQueryItem(name: "mode", value: "DEFAULT_BY_PROXIMITY"),
+                URLQueryItem(name: "format", value: "hostmap")
+            ]
+        )
+    }
+
+    private func postauthCatalogURL(from limitedCatalog: U2CCatalogResponse) throws -> URL {
+        let baseURL = try serviceURL(named: "u2c", in: limitedCatalog, errorName: "U2C")
+        return try catalogURL(
+            from: baseURL,
+            path: "catalog",
+            queryItems: [URLQueryItem(name: "format", value: "hostmap")]
+        )
+    }
+
+    private func catalogURL(from baseURL: URL, path catalogPath: String, queryItems: [URLQueryItem]) throws -> URL {
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
+              components.scheme?.lowercased() == "https",
+              components.host != nil else {
             throw WebexSDKError.network("Invalid Webex realtime U2C URL")
         }
 
-        var queryItems = components.queryItems ?? []
-        queryItems.append(URLQueryItem(name: "format", value: "hostmap"))
+        let basePath = components.path
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            .removingSuffix("limited/catalog")
+            .removingSuffix("catalog")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let pathParts = [basePath, catalogPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))]
+            .filter { !$0.isEmpty }
+        components.path = "/" + pathParts.joined(separator: "/")
         components.queryItems = queryItems
 
         guard let url = components.url else {
             throw WebexSDKError.network("Invalid Webex realtime U2C URL")
         }
 
-        let response = try await sendJSON(
-            U2CCatalogResponse.self,
-            request: makeRequest(url: url),
-            operation: "U2C catalog"
-        )
-        guard let wdmURL = URL(string: response.serviceLinks.wdm),
-              wdmURL.scheme?.lowercased() == "https",
-              wdmURL.host != nil else {
-            throw WebexSDKError.network("Invalid Webex realtime WDM URL")
+        return url
+    }
+
+    private func serviceURL(named name: String, in catalog: U2CCatalogResponse, errorName: String) throws -> URL {
+        guard let value = catalog.serviceLinks[name],
+              let url = URL(string: value),
+              url.scheme?.lowercased() == "https",
+              url.host != nil else {
+            throw WebexSDKError.network("Invalid Webex realtime \(errorName) URL")
         }
 
-        return wdmURL
+        return url
+    }
+
+    private func shouldUseLimitedCatalog(after error: Error) -> Bool {
+        guard let error = error as? WebexSDKError,
+              case .webexAPI(let statusCode, _, _) = error else {
+            return false
+        }
+
+        return statusCode == 401 || statusCode == 403
     }
 
     private func devicesURL(from wdmURL: URL) throws -> URL {
@@ -139,9 +200,14 @@ internal struct WebexMercuryDeviceService: Sendable {
     private func sendJSON<Response: Decodable>(
         _ type: Response.Type,
         request: URLRequest,
-        operation: String
+        operation: String,
+        requiresAuthorization: Bool = true
     ) async throws -> Response {
-        let response = try await send(request, operation: operation)
+        let response = try await send(
+            request,
+            operation: operation,
+            requiresAuthorization: requiresAuthorization
+        )
         do {
             return try JSONDecoder().decode(Response.self, from: response.data)
         } catch {
@@ -149,20 +215,27 @@ internal struct WebexMercuryDeviceService: Sendable {
         }
     }
 
-    private func send(_ originalRequest: URLRequest, operation: String) async throws -> HTTPResponse {
+    private func send(
+        _ originalRequest: URLRequest,
+        operation: String,
+        requiresAuthorization: Bool
+    ) async throws -> HTTPResponse {
         var attempt = 1
         var lastAccessToken: String?
 
         while true {
-            let accessToken: String
+            let accessToken: String?
             let response: HTTPResponse
             do {
-                let token = try await accessTokenProvider()
-                accessToken = token.value
-                lastAccessToken = token.value
-
                 var request = originalRequest
-                request.setValue("Bearer \(token.value)", forHTTPHeaderField: "Authorization")
+                if requiresAuthorization {
+                    let token = try await accessTokenProvider()
+                    accessToken = token.value
+                    lastAccessToken = token.value
+                    request.setValue("Bearer \(token.value)", forHTTPHeaderField: "Authorization")
+                } else {
+                    accessToken = nil
+                }
                 response = try await httpClient.send(request)
             } catch let error as CancellationError {
                 throw error
@@ -227,7 +300,7 @@ internal struct WebexMercuryDeviceService: Sendable {
         }
     }
 
-    private func responseError(for response: HTTPResponse, operation: String, accessToken: String) -> WebexSDKError {
+    private func responseError(for response: HTTPResponse, operation: String, accessToken: String?) -> WebexSDKError {
         if response.response.statusCode == 429 {
             return .rateLimited(retryAfter: retryPolicy.retryAfter(from: response.response))
         }
@@ -239,7 +312,7 @@ internal struct WebexMercuryDeviceService: Sendable {
         )
     }
 
-    private func responseMessage(from response: HTTPResponse, operation: String, accessToken: String) -> String {
+    private func responseMessage(from response: HTTPResponse, operation: String, accessToken: String?) -> String {
         let fallback = "Webex realtime \(operation) request returned HTTP \(response.response.statusCode)"
         guard let json = try? JSONSerialization.jsonObject(with: response.data) as? [String: Any],
               let message = json["message"] as? String,
@@ -309,11 +382,7 @@ internal struct WebexMercuryDeviceService: Sendable {
 }
 
 private struct U2CCatalogResponse: Decodable {
-    let serviceLinks: ServiceLinks
-
-    struct ServiceLinks: Decodable {
-        let wdm: String
-    }
+    let serviceLinks: [String: String]
 }
 
 private struct DeviceResponse: Decodable {
@@ -344,5 +413,15 @@ private struct DeviceCreateRequest: Encodable {
     init(deviceName: String) {
         self.deviceName = deviceName
         self.name = deviceName
+    }
+}
+
+private extension String {
+    func removingSuffix(_ suffix: String) -> String {
+        guard hasSuffix(suffix) else {
+            return self
+        }
+
+        return String(dropLast(suffix.count))
     }
 }

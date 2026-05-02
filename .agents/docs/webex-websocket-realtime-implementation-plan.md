@@ -487,7 +487,9 @@ internal struct WebexMercuryDeviceService: Sendable {
 
 Implement the private helpers in the same file:
 
-- `discoverWDMURL()` builds `u2cURL?format=hostmap`.
+- `discoverWDMURL()` fetches `limited/catalog?mode=DEFAULT_BY_PROXIMITY&format=hostmap` without authorization first.
+- Use the limited catalog's `u2c` service URL for the authorized postauth `catalog?format=hostmap` request.
+- Prefer postauth `wdm` when available; fall back to limited `wdm` when postauth catalog returns 401/403.
 - Avoid `GET <wdm>/devices` in the default path; OAuth integration tokens may be allowed to register devices without being allowed to list all devices.
 - In-memory cache reuse is scoped to the live `WebexClient`.
 - `createDevice(wdmURL:options:)` sends `POST <wdm>/devices` with JSON fields `deviceName`, `deviceType`, `localizedModel`, `model`, `name`, `systemName`, `systemVersion`.
@@ -1647,7 +1649,7 @@ In `.agents/docs/webex-realtime-triggers.md`, add a section:
 ```markdown
 ## WebSocket Realtime Status
 
-The SDK includes experimental native Swift WebSocket realtime support. It discovers WDM through U2C, registers a desktop device, connects with `URLSessionWebSocketTask`, emits `WebexRealtimeEvent`, and maps events into `WebexStreamTrigger`.
+The SDK includes experimental native Swift WebSocket realtime support. It discovers WDM through the limited/preauth U2C catalog with postauth preference when available, registers a desktop device, connects with `URLSessionWebSocketTask`, emits `WebexRealtimeEvent`, and maps events into `WebexStreamTrigger`.
 
 This is receive-only. REST remains the write/detail API. Unknown resource/event/payload shapes are preserved and surfaced for iteration through `Examples/WebexRealtimeEventsSmoke`.
 ```

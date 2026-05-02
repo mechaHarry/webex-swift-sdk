@@ -47,6 +47,9 @@ Components:
   - Emits lifecycle states: disconnected, discovering, registering device, connecting, authorizing, connected, reconnecting, failed.
 - `WebexMercuryDeviceService`
   - Discovers WDM through U2C.
+  - Fetches the unauthenticated limited/preauth U2C catalog first.
+  - Uses the limited catalog's `u2c` service link for the authenticated postauth catalog.
+  - Falls back to the limited catalog's `wdm` service link if postauth catalog returns 401/403.
   - Reuses an in-memory SDK-owned device while valid.
   - Creates/registers a WDM device directly when no cached device is valid.
 - `WebexMercuryWebSocketSession`
@@ -62,12 +65,14 @@ Startup flow:
 
 1. App calls `client.realtime.connect(options:)`.
 2. Realtime client asks the existing token manager for a fresh access token.
-3. Device service calls the U2C catalog endpoint and extracts the WDM service URL.
-4. Device service reuses its in-memory cached device if it matches the requested device name.
-5. If no usable cached device exists, device service creates one with a desktop/native SDK identity.
-6. Device service returns the WDM-provided `webSocketUrl`.
-7. WebSocket session connects to the `wss://` URL with `URLSessionWebSocketTask`.
-8. After connection, session sends an authorization frame:
+3. Device service calls the limited U2C catalog endpoint without authorization.
+4. Device service uses the limited catalog's `u2c` URL for the authorized postauth catalog when possible.
+5. Device service extracts WDM from postauth catalog, or from limited catalog if postauth returns 401/403.
+6. Device service reuses its in-memory cached device if it matches the requested device name.
+7. If no usable cached device exists, device service creates one with a desktop/native SDK identity.
+8. Device service returns the WDM-provided `webSocketUrl`.
+9. WebSocket session connects to the `wss://` URL with `URLSessionWebSocketTask`.
+10. After connection, session sends an authorization frame:
 
    ```json
    {
@@ -193,6 +198,9 @@ All API call code must gracefully back off.
 
 U2C/WDM HTTP calls:
 
+- Limited/preauth U2C catalog is unauthenticated.
+- Postauth U2C catalog uses the access token and may be forbidden for some integration tokens.
+- If postauth U2C returns 401/403, fall back to the limited catalog's WDM link.
 - Retry transient network errors, 429, and 5xx with the SDK retry policy.
 - Respect `Retry-After` when present.
 - Redact tokens, socket URLs, and payloads from thrown/logged errors.
@@ -272,6 +280,7 @@ Every feature requires strict tests.
 Unit tests will cover:
 
 - U2C catalog parsing.
+- Limited U2C fallback when postauth U2C is forbidden.
 - WDM service URL extraction.
 - In-memory WDM device reuse.
 - WDM device creation request shape.

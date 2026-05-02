@@ -204,6 +204,11 @@ calls but can fail WDM device registration with HTTP 403 before a socket opens.
 After changing an integration's scopes, reauthorize so the access token actually
 contains the new grants.
 
+U2C discovery follows the Webex JavaScript SDK shape: fetch the limited/preauth
+catalog without authorization, use its `u2c` service link for the postauth
+catalog when possible, and fall back to the limited catalog's `wdm` service link
+if postauth U2C returns 401/403 for an integration token.
+
 The implementation is sample-backed and experimental. It uses U2C/WDM device
 discovery, `URLSessionWebSocketTask`, authorization frames, ack frames,
 reconnect/backoff, stale-device retry, auth retry, unknown event preservation,
