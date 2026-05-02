@@ -14,7 +14,7 @@ This package provides the OAuth and authenticated REST foundation:
 - memory-only access-token cache by default
 - coordinated token refresh
 - authenticated REST transport
-- typed People, Spaces, and Memberships APIs
+- typed People, Spaces, Memberships, and Messages APIs
 
 ## Example
 
@@ -97,9 +97,37 @@ let people = try await client.people.list(params: .init(id: me.id, excludeStatus
 print(people.items.first?.displayName ?? me.id)
 ```
 
+## Messages
+
+Messages are available through `client.messages`. Use `spark:messages_read` for
+list/get calls and `spark:messages_write` for create/edit/delete calls.
+
+```swift
+let page = try await client.messages.list(params: .init(roomID: spaceID, max: 25))
+for message in page.items {
+    print(message.id, message.text ?? message.markdown ?? "(no text)")
+}
+
+if let nextPage = page.nextPage {
+    let olderMessages = try await client.messages.list(nextPage: nextPage)
+    print("Fetched another \(olderMessages.items.count) messages")
+}
+
+let created = try await client.messages.create(.init(
+    roomID: spaceID,
+    markdown: "**Status:** investigating"
+))
+let edited = try await client.messages.edit(
+    messageID: created.id,
+    .init(roomID: spaceID, markdown: "**Status:** resolved")
+)
+try await client.messages.delete(messageID: edited.id)
+```
+
 ## Examples
 
 - `Examples/WebexClientSmoke`: interactive OAuth smoke test that uses the SDK-owned loopback listener, stores a registry account, exchanges an authorization code, creates `WebexClient`, and calls `people.me()`.
 - `Examples/WebexPeopleReadSmoke`: interactive OAuth smoke test that reads the current person and performs a bounded People list lookup.
 - `Examples/WebexSpacesListSmoke`: interactive OAuth smoke test that lists Spaces with explicit bounded pagination.
 - `Examples/WebexMembershipsListSmoke`: interactive OAuth smoke test that lists Memberships for `WEBEX_ROOM_ID` with explicit bounded pagination.
+- `Examples/WebexMessagesListSmoke`: interactive OAuth smoke test that lists Messages for `WEBEX_ROOM_ID` with explicit bounded pagination.
