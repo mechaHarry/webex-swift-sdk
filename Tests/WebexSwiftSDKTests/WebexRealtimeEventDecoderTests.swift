@@ -72,6 +72,41 @@ final class WebexRealtimeEventDecoderTests: XCTestCase {
         XCTAssertEqual(event.actorID, "person-3")
     }
 
+    func testKnownJSSDKLikeEventWithNonObjectDataPreservesRawPayload() throws {
+        let event = try WebexRealtimeEventDecoder().decode(jsonData("""
+        {
+          "id": "event-raw-data",
+          "resource": "messages",
+          "event": "created",
+          "data": ["unexpected", "shape"]
+        }
+        """))
+
+        XCTAssertEqual(event.decodeStatus, .unknownPayload)
+        XCTAssertNil(event.resourceID)
+        XCTAssertEqual(event.payload["_raw"], .array([.string("unexpected"), .string("shape")]))
+    }
+
+    func testKnownJSSDKLikeEventWithMissingDataPreservesFramePayload() throws {
+        let event = try WebexRealtimeEventDecoder().decode(jsonData("""
+        {
+          "id": "event-missing-data",
+          "resource": "messages",
+          "event": "created",
+          "trackingId": "tracking-1"
+        }
+        """))
+
+        XCTAssertEqual(event.decodeStatus, .unknownPayload)
+        XCTAssertNil(event.resourceID)
+        XCTAssertEqual(event.payload["_frame"], .object([
+            "id": .string("event-missing-data"),
+            "resource": .string("messages"),
+            "event": .string("created"),
+            "trackingId": .string("tracking-1")
+        ]))
+    }
+
     func testDecodesKnownJSSDKLikeRoomEvents() throws {
         for eventName in ["created", "updated"] {
             let event = try decodeJSSDKLikeEvent(

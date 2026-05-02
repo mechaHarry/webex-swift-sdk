@@ -36,7 +36,7 @@ struct WebexRealtimeEventDecoder: Sendable {
         resource: String,
         event: String
     ) -> WebexRealtimeEvent {
-        let payload = root.objectValue(forKey: "data") ?? [:]
+        let payload = jsSDKLikePayload(root: root)
         let resourceID = payload.stringValue(forKey: "id")
         let roomID = payload.stringValue(forKey: "roomId")
         let actorID = payload.stringValue(forKey: "personId") ?? payload.stringValue(forKey: "actorId")
@@ -59,6 +59,18 @@ struct WebexRealtimeEventDecoder: Sendable {
             actorID: actorID,
             payload: payload
         )
+    }
+
+    private func jsSDKLikePayload(root: [String: WebexJSONValue]) -> [String: WebexJSONValue] {
+        guard let data = root["data"] else {
+            return ["_frame": .object(root)]
+        }
+
+        guard case .object(let payload) = data else {
+            return ["_raw": data]
+        }
+
+        return payload
     }
 
     private func decodeMercuryConversationActivity(root: [String: WebexJSONValue]) -> WebexRealtimeEvent? {
