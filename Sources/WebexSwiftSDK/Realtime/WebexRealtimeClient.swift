@@ -173,12 +173,26 @@ internal final class WebexRealtimeLiveConnectionSource: WebexRealtimeConnectionS
                 if isStaleDevice(error: error), staleDeviceRefreshAttempts < 3 {
                     staleDeviceRefreshAttempts += 1
                     await deviceService.invalidateCachedDevice()
+                    guard canAttemptConnectionAgain(after: retryAttempt) else {
+                        streamState.yield(.failed(error))
+                        streamState.finish()
+                        return
+                    }
+
+                    retryAttempt += 1
                     continue
                 }
 
                 if isAuthFailure(error: error), !didInvalidateToken {
                     didInvalidateToken = true
                     await tokenInvalidator()
+                    guard canAttemptConnectionAgain(after: retryAttempt) else {
+                        streamState.yield(.failed(error))
+                        streamState.finish()
+                        return
+                    }
+
+                    retryAttempt += 1
                     continue
                 }
 
@@ -269,7 +283,7 @@ internal final class WebexRealtimeLiveConnectionSource: WebexRealtimeConnectionS
     }
 
     private func shouldRetryConnection(error: WebexSDKError, attempt: Int) -> Bool {
-        guard attempt < options.retryPolicy.maxAttempts else {
+        guard canAttemptConnectionAgain(after: attempt) else {
             return false
         }
 
@@ -293,6 +307,10 @@ internal final class WebexRealtimeLiveConnectionSource: WebexRealtimeConnectionS
              nil:
             return false
         }
+    }
+
+    private func canAttemptConnectionAgain(after attempt: Int) -> Bool {
+        attempt < options.retryPolicy.maxAttempts
     }
 
     private func retryDelay(for error: WebexSDKError, attempt: Int) -> TimeInterval {

@@ -295,6 +295,58 @@ final class WebexRealtimeConnectionTests: XCTestCase {
         XCTAssertEqual(invalidationCount, 1)
     }
 
+    func testLiveSourceDoesNotRetryUnauthorizedWhenMaxAttemptsIsOne() async throws {
+        let device = WebexMercuryDevice(
+            id: "device-id",
+            name: "webex-swift-sdk",
+            webSocketURL: URL(string: "wss://mercury.example.com")!
+        )
+        let invalidator = TokenInvalidatorSpy()
+        let sessions = MercurySessionQueue([
+            FakeMercurySession(frames: [], error: WebexSDKError.webexAPI(statusCode: 401, trackingID: nil, message: "unauthorized")),
+            FakeMercurySession(frames: [
+                """
+                {"id":"event-1","resource":"messages","event":"created","data":{"id":"message-id","roomId":"room-id","personId":"person-id"}}
+                """
+            ])
+        ])
+        let source = WebexRealtimeLiveConnectionSource(
+            httpClient: NoopHTTPClient(),
+            accessTokenProvider: {
+                AccessTokenState(
+                    value: "access-token",
+                    expiresAt: Date(timeIntervalSince1970: 1_000),
+                    tokenType: "Bearer"
+                )
+            },
+            tokenInvalidator: {
+                await invalidator.invalidate()
+            },
+            options: WebexRealtimeOptions(retryPolicy: RetryPolicy(maxAttempts: 1, baseDelay: 1, jitter: 0, maximumDelay: 10)),
+            deviceServiceFactory: { _, _, _, _ in
+                FakeDeviceService(device: device)
+            },
+            webSocketFactory: { _ in
+                FakeLiveWebSocket()
+            },
+            sessionFactory: { _, _ in
+                sessions.next()
+            }
+        )
+        var stateIterator = source.states.makeAsyncIterator()
+        var eventIterator = source.events.makeAsyncIterator()
+
+        source.start()
+        let failedState = await firstFailedState(from: &stateIterator)
+        let event = await eventIterator.next()
+        let invalidationCount = await invalidator.count()
+
+        XCTAssertEqual(failedState, .failed(.webexAPI(statusCode: 401, trackingID: nil, message: "unauthorized")))
+        XCTAssertNil(event)
+        XCTAssertEqual(invalidationCount, 1)
+        XCTAssertEqual(sessions.requestCount(), 1)
+    }
+
     func testLiveSourceInvalidatesStaleDeviceAndRetriesPromptly() async throws {
         let deviceService = InspectableDeviceService(device: WebexMercuryDevice(
             id: "device-id",
@@ -338,6 +390,54 @@ final class WebexRealtimeConnectionTests: XCTestCase {
 
         XCTAssertEqual(event?.resourceID, "message-id")
         XCTAssertEqual(invalidationCount, 1)
+    }
+
+    func testLiveSourceDoesNotRetryStaleDeviceWhenMaxAttemptsIsOne() async throws {
+        let deviceService = InspectableDeviceService(device: WebexMercuryDevice(
+            id: "device-id",
+            name: "webex-swift-sdk",
+            webSocketURL: URL(string: "wss://mercury.example.com")!
+        ))
+        let sessions = MercurySessionQueue([
+            FakeMercurySession(frames: [], error: WebexSDKError.webexAPI(statusCode: 404, trackingID: nil, message: "device not found")),
+            FakeMercurySession(frames: [
+                """
+                {"id":"event-1","resource":"messages","event":"created","data":{"id":"message-id","roomId":"room-id","personId":"person-id"}}
+                """
+            ])
+        ])
+        let source = WebexRealtimeLiveConnectionSource(
+            httpClient: NoopHTTPClient(),
+            accessTokenProvider: {
+                AccessTokenState(
+                    value: "access-token",
+                    expiresAt: Date(timeIntervalSince1970: 1_000),
+                    tokenType: "Bearer"
+                )
+            },
+            tokenInvalidator: {},
+            options: WebexRealtimeOptions(retryPolicy: RetryPolicy(maxAttempts: 1, baseDelay: 1, jitter: 0, maximumDelay: 10)),
+            deviceServiceFactory: { _, _, _, _ in
+                deviceService
+            },
+            webSocketFactory: { _ in
+                FakeLiveWebSocket()
+            },
+            sessionFactory: { _, _ in
+                sessions.next()
+            }
+        )
+        var stateIterator = source.states.makeAsyncIterator()
+        var eventIterator = source.events.makeAsyncIterator()
+
+        source.start()
+        let failedState = await firstFailedState(from: &stateIterator)
+        let event = await eventIterator.next()
+
+        XCTAssertEqual(failedState, .failed(.webexAPI(statusCode: 404, trackingID: nil, message: "device not found")))
+        XCTAssertNil(event)
+        XCTAssertEqual(deviceService.invalidateCount(), 1)
+        XCTAssertEqual(sessions.requestCount(), 1)
     }
 
     func testLiveSourceReconnectsTransientNetworkFailureWithBackoff() async throws {
@@ -625,6 +725,7 @@ private final class FakeMercurySession: WebexMercurySession, @unchecked Sendable
 private final class MercurySessionQueue: @unchecked Sendable {
     private let lock = NSLock()
     private var sessions: [WebexMercurySession]
+    private var requests = 0
 
     init(_ sessions: [WebexMercurySession]) {
         self.sessions = sessions
@@ -632,11 +733,18 @@ private final class MercurySessionQueue: @unchecked Sendable {
 
     func next() -> WebexMercurySession {
         lock.withLock {
+            requests += 1
             guard !sessions.isEmpty else {
                 return FakeMercurySession(frames: [], error: WebexSDKError.network("Unexpected session request"))
             }
 
             return sessions.removeFirst()
+        }
+    }
+
+    func requestCount() -> Int {
+        lock.withLock {
+            requests
         }
     }
 }
