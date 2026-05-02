@@ -105,6 +105,61 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
         XCTAssertNil(invalidatedDevice)
     }
 
+    func testCachedDeviceIsNotReusedForDifferentDeviceName() async throws {
+        let httpClient = MockMercuryDeviceHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            url: URL(string: "https://u2c.wbx2.com/u2c/api/v1/catalog?format=hostmap")!,
+            statusCode: 200,
+            body: #"{"serviceLinks":{"wdm":"https://wdm.example.com/wdm/api/v1"}}"#
+        ))
+        await httpClient.enqueue(response: httpResponse(
+            url: URL(string: "https://wdm.example.com/wdm/api/v1/devices")!,
+            statusCode: 200,
+            body: #"{"devices":[{"id":"device-1","name":"desk-one","webSocketUrl":"wss://one.example.com"}]}"#
+        ))
+        await httpClient.enqueue(response: httpResponse(
+            url: URL(string: "https://u2c.wbx2.com/u2c/api/v1/catalog?format=hostmap")!,
+            statusCode: 200,
+            body: #"{"serviceLinks":{"wdm":"https://wdm.example.com/wdm/api/v1"}}"#
+        ))
+        await httpClient.enqueue(response: httpResponse(
+            url: URL(string: "https://wdm.example.com/wdm/api/v1/devices")!,
+            statusCode: 200,
+            body: #"{"devices":[{"id":"device-2","name":"desk-two","webSocketUrl":"wss://two.example.com"}]}"#
+        ))
+        let service = makeService(httpClient: httpClient)
+
+        let firstDevice = try await service.device(options: WebexRealtimeOptions(deviceName: "desk-one"))
+        let secondDevice = try await service.device(options: WebexRealtimeOptions(deviceName: "desk-two"))
+
+        XCTAssertEqual(firstDevice.name, "desk-one")
+        XCTAssertEqual(secondDevice, WebexMercuryDevice(id: "device-2", name: "desk-two", webSocketURL: URL(string: "wss://two.example.com")!))
+        let requestCount = await httpClient.requestCount()
+        XCTAssertEqual(requestCount, 4)
+    }
+
+    func testPreservesNonNetworkWebexSDKErrorFromAccessTokenProvider() async throws {
+        let accountID = WebexAccountID()
+        let expectedError = WebexSDKError.reauthenticationRequired(accountID)
+        let service = WebexMercuryDeviceService(
+            httpClient: MockMercuryDeviceHTTPClient(),
+            accessTokenProvider: {
+                throw expectedError
+            },
+            retryPolicy: RetryPolicy(maxAttempts: 1, baseDelay: 0, jitter: 0, maximumDelay: 10),
+            sleeper: { _ in }
+        )
+
+        do {
+            _ = try await service.device(options: WebexRealtimeOptions(deviceName: "desk"))
+            XCTFail("Expected reauthenticationRequired error")
+        } catch let error as WebexSDKError {
+            XCTAssertEqual(error, expectedError)
+        } catch {
+            XCTFail("Expected WebexSDKError, got \(error)")
+        }
+    }
+
     func testRetriesRateLimitWithRetryAfterThenSucceeds() async throws {
         let httpClient = MockMercuryDeviceHTTPClient()
         let sleeper = SleepRecorder()

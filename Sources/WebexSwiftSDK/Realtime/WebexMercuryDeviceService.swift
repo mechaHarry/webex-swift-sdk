@@ -55,7 +55,7 @@ internal struct WebexMercuryDeviceService: Sendable {
     }
 
     internal func device(options: WebexRealtimeOptions) async throws -> WebexMercuryDevice {
-        if let cached = await cache.load() {
+        if let cached = await cache.load(), cached.name == options.deviceName {
             return cached
         }
 
@@ -265,11 +265,15 @@ internal struct WebexMercuryDeviceService: Sendable {
     }
 
     private func redactedNetworkError(_ error: Error, accessToken: String?) -> WebexSDKError {
-        if case .network(let message) = error as? WebexSDKError {
+        guard let sdkError = error as? WebexSDKError else {
+            return .network("Webex realtime request failed: \(redact(error.localizedDescription, accessToken: accessToken))")
+        }
+
+        if case .network(let message) = sdkError {
             return .network(redact(message, accessToken: accessToken))
         }
 
-        return .network("Webex realtime request failed: \(redact(error.localizedDescription, accessToken: accessToken))")
+        return sdkError
     }
 
     private func redact(_ value: String, accessToken: String?) -> String {
