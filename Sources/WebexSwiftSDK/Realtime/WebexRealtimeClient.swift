@@ -256,7 +256,11 @@ internal final class WebexRealtimeLiveConnectionSource: WebexRealtimeConnectionS
             let session = sessionFactory(webSocket, accessTokenProvider)
             streamState.setActive(webSocket: webSocket, session: session)
 
+            try await session.connect()
+
             streamState.yield(.authorizing)
+            try await session.authorize()
+
             let frames = session.frames()
             streamState.yield(.connected)
 
@@ -350,6 +354,8 @@ internal protocol WebexMercuryDeviceProviding: Sendable {
 extension WebexMercuryDeviceService: WebexMercuryDeviceProviding {}
 
 internal protocol WebexMercurySession: Sendable {
+    func connect() async throws
+    func authorize() async throws
     func frames() -> AsyncThrowingStream<String, Error>
     func ack(messageID: String) async throws
     func cancel()

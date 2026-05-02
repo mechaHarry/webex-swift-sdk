@@ -175,6 +175,65 @@ final class WebexRealtimeConnectionTests: XCTestCase {
         XCTAssertEqual(session.acknowledgedMessageIDs(), [])
     }
 
+    func testLiveSourceWaitsForAuthorizationBeforeEmittingConnected() async throws {
+        let device = WebexMercuryDevice(
+            id: "device-id",
+            name: "webex-swift-sdk",
+            webSocketURL: URL(string: "wss://mercury.example.com")!
+        )
+        let session = GatedMercurySession()
+        let source = WebexRealtimeLiveConnectionSource(
+            httpClient: NoopHTTPClient(),
+            accessTokenProvider: {
+                AccessTokenState(
+                    value: "access-token",
+                    expiresAt: Date(timeIntervalSince1970: 1_000),
+                    tokenType: "Bearer"
+                )
+            },
+            tokenInvalidator: {},
+            options: WebexRealtimeOptions(),
+            deviceServiceFactory: { _, _, _, _ in
+                FakeDeviceService(device: device)
+            },
+            webSocketFactory: { _ in
+                FakeLiveWebSocket()
+            },
+            sessionFactory: { _, _ in
+                session
+            }
+        )
+        var stateIterator = source.states.makeAsyncIterator()
+
+        source.start()
+
+        var states: [WebexRealtimeConnectionState] = []
+        for _ in 0..<4 {
+            if let state = await stateIterator.next() {
+                states.append(state)
+            }
+        }
+
+        XCTAssertEqual(states, [.discovering, .registeringDevice, .connecting, .authorizing])
+
+        let capturedState = RealtimeStateCapture()
+        let pendingConnectedRead = Task {
+            await capturedState.set(await stateIterator.next())
+        }
+
+        try await Task.sleep(for: .milliseconds(50))
+        let stateBeforeAuthorizationCompletes = await capturedState.state()
+        XCTAssertNil(stateBeforeAuthorizationCompletes)
+
+        session.finishAuthorization()
+        try await eventually {
+            await capturedState.state() == .connected
+        }
+
+        source.cancel()
+        pendingConnectedRead.cancel()
+    }
+
     func testConnectionDeinitCancelsLiveSourceSessionAndSocket() async throws {
         let device = WebexMercuryDevice(
             id: "device-id",
@@ -694,6 +753,10 @@ private final class FakeMercurySession: WebexMercurySession, @unchecked Sendable
         self.error = error
     }
 
+    func connect() async throws {}
+
+    func authorize() async throws {}
+
     func frames() -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             for frame in framesToEmit {
@@ -754,6 +817,10 @@ private final class BlockingFakeMercurySession: WebexMercurySession, @unchecked 
     private var cancels = 0
     private var frameContinuation: AsyncThrowingStream<String, Error>.Continuation?
 
+    func connect() async throws {}
+
+    func authorize() async throws {}
+
     func frames() -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             lock.withLock {
@@ -776,6 +843,61 @@ private final class BlockingFakeMercurySession: WebexMercurySession, @unchecked 
         lock.withLock {
             cancels
         }
+    }
+}
+
+private final class GatedMercurySession: WebexMercurySession, @unchecked Sendable {
+    private let lock = NSLock()
+    private var isAuthorizationFinished = false
+    private var frameContinuation: AsyncThrowingStream<String, Error>.Continuation?
+    private var cancels = 0
+
+    func connect() async throws {}
+
+    func authorize() async throws {
+        while true {
+            if lock.withLock({ isAuthorizationFinished }) {
+                return
+            }
+
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    func frames() -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            lock.withLock {
+                frameContinuation = continuation
+            }
+        }
+    }
+
+    func ack(messageID: String) async throws {}
+
+    func cancel() {
+        let continuation = lock.withLock {
+            cancels += 1
+            return frameContinuation
+        }
+        continuation?.finish()
+    }
+
+    func finishAuthorization() {
+        lock.withLock {
+            isAuthorizationFinished = true
+        }
+    }
+}
+
+private actor RealtimeStateCapture {
+    private var capturedState: WebexRealtimeConnectionState?
+
+    func set(_ state: WebexRealtimeConnectionState?) {
+        capturedState = state
+    }
+
+    func state() -> WebexRealtimeConnectionState? {
+        capturedState
     }
 }
 

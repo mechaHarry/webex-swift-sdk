@@ -3,6 +3,7 @@ import Foundation
 internal final class WebexMercuryWebSocketSession: @unchecked Sendable {
     private let webSocket: WebexRealtimeWebSocket
     private let accessTokenProvider: @Sendable () async throws -> AccessTokenState
+    private let state = WebexMercuryWebSocketSessionState()
 
     internal init(
         webSocket: WebexRealtimeWebSocket,
@@ -12,17 +13,35 @@ internal final class WebexMercuryWebSocketSession: @unchecked Sendable {
         self.accessTokenProvider = accessTokenProvider
     }
 
+    internal func connect() async throws {
+        do {
+            try await webSocket.connect()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw redactedError(error, accessToken: state.accessToken())
+        }
+    }
+
+    internal func authorize() async throws {
+        var accessToken: String?
+
+        do {
+            let token = try await accessTokenProvider()
+            accessToken = token.value
+            state.setAccessToken(token.value)
+            try await webSocket.send(text: try authorizationFrame(accessToken: token.value))
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw redactedError(error, accessToken: accessToken ?? state.accessToken())
+        }
+    }
+
     internal func frames() -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                var accessToken: String?
-
                 do {
-                    try await webSocket.connect()
-                    let token = try await accessTokenProvider()
-                    accessToken = token.value
-                    try await webSocket.send(text: try authorizationFrame(accessToken: token.value))
-
                     while !Task.isCancelled {
                         continuation.yield(try await webSocket.receiveText())
                     }
@@ -31,7 +50,7 @@ internal final class WebexMercuryWebSocketSession: @unchecked Sendable {
                 } catch is CancellationError {
                     continuation.finish()
                 } catch {
-                    continuation.finish(throwing: redactedNetworkError(error, accessToken: accessToken))
+                    continuation.finish(throwing: redactedError(error, accessToken: state.accessToken()))
                 }
             }
 
@@ -51,7 +70,10 @@ internal final class WebexMercuryWebSocketSession: @unchecked Sendable {
     }
 
     private func authorizationFrame(accessToken: String) throws -> String {
-        try encode(AuthorizationFrame(data: AuthorizationFrame.DataFrame(token: "Bearer \(accessToken)")))
+        try encode(AuthorizationFrame(
+            id: UUID().uuidString,
+            data: AuthorizationFrame.DataFrame(token: "Bearer \(accessToken)")
+        ))
     }
 
     private func encode<Frame: Encodable>(_ frame: Frame) throws -> String {
@@ -65,9 +87,13 @@ internal final class WebexMercuryWebSocketSession: @unchecked Sendable {
         return text
     }
 
-    private func redactedNetworkError(_ error: Error, accessToken: String?) -> WebexSDKError {
+    private func redactedError(_ error: Error, accessToken: String?) -> WebexSDKError {
         if case .network(let message) = error as? WebexSDKError {
             return .network(redact(message, accessToken: accessToken))
+        }
+
+        if let error = error as? WebexSDKError {
+            return error
         }
 
         return .network("Webex realtime WebSocket failed: \(redact(error.localizedDescription, accessToken: accessToken))")
@@ -75,6 +101,7 @@ internal final class WebexMercuryWebSocketSession: @unchecked Sendable {
 
     private func redact(_ value: String, accessToken: String?) -> String {
         var redacted = Redactor.redactSecrets(value)
+        redacted = redactWebSocketURLs(redacted)
         redacted = redactBearerTokens(redacted)
         if let accessToken, !accessToken.isEmpty {
             redacted = redacted.replacingOccurrences(of: accessToken, with: "[redacted]")
@@ -102,9 +129,24 @@ internal final class WebexMercuryWebSocketSession: @unchecked Sendable {
 
         return mutableValue as String
     }
+
+    private func redactWebSocketURLs(_ value: String) -> String {
+        let expression = try! NSRegularExpression(
+            pattern: #"\bwss://[^\s"'<>)]+"#,
+            options: [.caseInsensitive]
+        )
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        return expression.stringByReplacingMatches(
+            in: value,
+            options: [],
+            range: range,
+            withTemplate: "wss://[redacted]"
+        )
+    }
 }
 
 private struct AuthorizationFrame: Encodable {
+    let id: String
     let data: DataFrame
     let type = "authorization"
 
@@ -116,4 +158,21 @@ private struct AuthorizationFrame: Encodable {
 private struct AckFrame: Encodable {
     let messageId: String
     let type = "ack"
+}
+
+private final class WebexMercuryWebSocketSessionState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedAccessToken: String?
+
+    func setAccessToken(_ accessToken: String) {
+        lock.withLock {
+            storedAccessToken = accessToken
+        }
+    }
+
+    func accessToken() -> String? {
+        lock.withLock {
+            storedAccessToken
+        }
+    }
 }

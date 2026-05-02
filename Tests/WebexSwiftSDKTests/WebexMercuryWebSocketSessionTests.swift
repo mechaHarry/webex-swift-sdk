@@ -9,15 +9,21 @@ final class WebexMercuryWebSocketSessionTests: XCTestCase {
         webSocket.enqueueReceive(.failure(CancellationError()))
         let session = makeSession(webSocket: webSocket)
 
+        try await session.connect()
+        try await session.authorize()
         var iterator = session.frames().makeAsyncIterator()
         let frame = try await iterator.next()
 
         XCTAssertEqual(frame, #"{"type":"event"}"#)
+        XCTAssertEqual(webSocket.connectCount(), 1)
         let sentTexts = webSocket.sentTexts()
         XCTAssertEqual(sentTexts.count, 1)
         let authorizationText = try XCTUnwrap(sentTexts.first)
-        XCTAssertTrue(authorizationText.contains(#""type":"authorization""#))
-        XCTAssertTrue(authorizationText.contains(#""token":"Bearer access-token""#))
+        let authorizationObject = try decodeJSONObject(authorizationText)
+        let data = try XCTUnwrap(authorizationObject["data"] as? [String: Any])
+        XCTAssertFalse((authorizationObject["id"] as? String)?.isEmpty ?? true)
+        XCTAssertEqual(authorizationObject["type"] as? String, "authorization")
+        XCTAssertEqual(data["token"] as? String, "Bearer access-token")
     }
 
     func testAckFrameUsesMessageID() async throws {
@@ -59,11 +65,13 @@ final class WebexMercuryWebSocketSessionTests: XCTestCase {
         }
     }
 
-    func testStreamErrorDescriptionRedactsAccessToken() async throws {
+    func testStreamErrorDescriptionRedactsAccessTokenAndWebSocketURL() async throws {
         let webSocket = FakeWebSocket()
-        webSocket.enqueueReceive(.failure(WebexSDKError.network("secret access-token")))
+        webSocket.enqueueReceive(.failure(WebexSDKError.network("failed wss://mercury.example.com/socket?access_token=socket-secret secret access-token")))
         let session = makeSession(webSocket: webSocket)
 
+        try await session.connect()
+        try await session.authorize()
         do {
             for try await _ in session.frames() {}
             XCTFail("Expected stream failure")
@@ -71,6 +79,9 @@ final class WebexMercuryWebSocketSessionTests: XCTestCase {
             let description = String(describing: error)
             XCTAssertTrue(description.contains("[redacted]"))
             XCTAssertFalse(description.contains("access-token"))
+            XCTAssertFalse(description.contains("socket-secret"))
+            XCTAssertFalse(description.contains("mercury.example.com"))
+            XCTAssertTrue(description.contains("wss://[redacted]"))
         }
     }
 
@@ -85,6 +96,11 @@ final class WebexMercuryWebSocketSessionTests: XCTestCase {
                 )
             }
         )
+    }
+
+    private func decodeJSONObject(_ text: String) throws -> [String: Any] {
+        let data = Data(text.utf8)
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
     private func eventually(
@@ -126,6 +142,12 @@ private final class FakeWebSocket: WebexRealtimeWebSocket, @unchecked Sendable {
     func cancelCount() -> Int {
         lock.withLock {
             cancels
+        }
+    }
+
+    func connectCount() -> Int {
+        lock.withLock {
+            connects
         }
     }
 
