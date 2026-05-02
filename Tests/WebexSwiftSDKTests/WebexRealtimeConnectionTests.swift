@@ -22,6 +22,25 @@ final class WebexRealtimeConnectionTests: XCTestCase {
         XCTAssertEqual(trigger?.roomID, "room-id")
     }
 
+    func testConnectionFanOutGivesEachSubscriberFullEventSequence() async throws {
+        let source = FakeRealtimeConnectionSource()
+        let connection = WebexRealtimeConnection(source: source)
+        var firstEventIterator = connection.events.makeAsyncIterator()
+        var secondEventIterator = connection.events.makeAsyncIterator()
+        var triggerIterator = connection.triggers.makeAsyncIterator()
+        let event = messageEvent()
+
+        source.emit(event)
+
+        let firstEvent = await firstEventIterator.next()
+        let secondEvent = await secondEventIterator.next()
+        let trigger = await triggerIterator.next()
+
+        XCTAssertEqual(firstEvent, event)
+        XCTAssertEqual(secondEvent, event)
+        XCTAssertEqual(trigger, event.streamTrigger())
+    }
+
     func testCancelFinishesConnection() async {
         let source = FakeRealtimeConnectionSource()
         let connection = WebexRealtimeConnection(source: source)
@@ -32,6 +51,18 @@ final class WebexRealtimeConnectionTests: XCTestCase {
         XCTAssertEqual(source.cancelCount(), 1)
         let event = await eventIterator.next()
         XCTAssertNil(event)
+    }
+
+    func testConnectionDeinitCancelsSource() async throws {
+        let source = FakeRealtimeConnectionSource()
+        var connection: WebexRealtimeConnection? = WebexRealtimeConnection(source: source)
+
+        XCTAssertNotNil(connection)
+        connection = nil
+
+        try await eventually {
+            source.cancelCount() == 1
+        }
     }
 
     func testWebexClientExposesRealtimeClient() throws {
@@ -111,6 +142,80 @@ final class WebexRealtimeConnectionTests: XCTestCase {
         XCTAssertEqual(session.acknowledgedMessageIDs(), [])
     }
 
+    func testConnectionDeinitCancelsLiveSourceSessionAndSocket() async throws {
+        let device = WebexMercuryDevice(
+            id: "device-id",
+            name: "webex-swift-sdk",
+            webSocketURL: URL(string: "wss://mercury.example.com")!
+        )
+        let session = BlockingFakeMercurySession()
+        let webSocket = InspectableFakeWebSocket()
+        let source = WebexRealtimeLiveConnectionSource(
+            httpClient: NoopHTTPClient(),
+            accessTokenProvider: {
+                AccessTokenState(
+                    value: "access-token",
+                    expiresAt: Date(timeIntervalSince1970: 1_000),
+                    tokenType: "Bearer"
+                )
+            },
+            tokenInvalidator: {},
+            options: WebexRealtimeOptions(),
+            deviceServiceFactory: { _, _, _, _ in
+                FakeDeviceService(device: device)
+            },
+            webSocketFactory: { _ in
+                webSocket
+            },
+            sessionFactory: { _, _ in
+                session
+            }
+        )
+        var connection: WebexRealtimeConnection? = WebexRealtimeConnection(source: source)
+        var stateIterator = connection!.states.makeAsyncIterator()
+
+        source.start()
+        for _ in 0..<5 {
+            _ = await stateIterator.next()
+        }
+        connection = nil
+
+        try await eventually {
+            session.cancelCount() > 0 && webSocket.cancelCount() > 0
+        }
+    }
+
+    func testLiveSourceInvalidatesTokenOnUnauthorizedDeviceSetupError() async throws {
+        let invalidator = TokenInvalidatorSpy()
+        let source = WebexRealtimeLiveConnectionSource(
+            httpClient: NoopHTTPClient(),
+            accessTokenProvider: {
+                AccessTokenState(
+                    value: "access-token",
+                    expiresAt: Date(timeIntervalSince1970: 1_000),
+                    tokenType: "Bearer"
+                )
+            },
+            tokenInvalidator: {
+                await invalidator.invalidate()
+            },
+            options: WebexRealtimeOptions(),
+            deviceServiceFactory: { _, _, _, _ in
+                FailingDeviceService(error: .webexAPI(statusCode: 401, trackingID: nil, message: "unauthorized"))
+            }
+        )
+        var stateIterator = source.states.makeAsyncIterator()
+
+        source.start()
+        _ = await stateIterator.next()
+        _ = await stateIterator.next()
+        let failedState = await stateIterator.next()
+        let invalidationCount = await invalidator.count()
+
+        XCTAssertEqual(failedState, .failed(.webexAPI(statusCode: 401, trackingID: nil, message: "unauthorized")))
+        XCTAssertEqual(invalidationCount, 1)
+    }
+
     func testLiveSourceFilteringHelperExcludesMembershipSeenByDefault() {
         let event = WebexRealtimeEvent(
             resource: "memberships",
@@ -140,6 +245,22 @@ final class WebexRealtimeConnectionTests: XCTestCase {
             roomID: "room-id",
             actorID: "actor-id"
         )
+    }
+
+    private func eventually(
+        timeout: Duration = .seconds(1),
+        predicate: @escaping @Sendable () async -> Bool
+    ) async throws {
+        let start = ContinuousClock.now
+
+        while !(await predicate()) {
+            if start.duration(to: ContinuousClock.now) >= timeout {
+                XCTFail("Condition was not satisfied before timeout")
+                return
+            }
+
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 }
 
@@ -205,6 +326,14 @@ private struct FakeDeviceService: WebexMercuryDeviceProviding {
     }
 }
 
+private struct FailingDeviceService: WebexMercuryDeviceProviding {
+    let error: WebexSDKError
+
+    func device(options: WebexRealtimeOptions) async throws -> WebexMercuryDevice {
+        throw error
+    }
+}
+
 private final class FakeMercurySession: WebexMercurySession, @unchecked Sendable {
     private let lock = NSLock()
     private let framesToEmit: [String]
@@ -243,6 +372,36 @@ private final class FakeMercurySession: WebexMercurySession, @unchecked Sendable
     }
 }
 
+private final class BlockingFakeMercurySession: WebexMercurySession, @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancels = 0
+    private var frameContinuation: AsyncThrowingStream<String, Error>.Continuation?
+
+    func frames() -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            lock.withLock {
+                frameContinuation = continuation
+            }
+        }
+    }
+
+    func ack(messageID: String) async throws {}
+
+    func cancel() {
+        let continuation = lock.withLock {
+            cancels += 1
+            return frameContinuation
+        }
+        continuation?.finish()
+    }
+
+    func cancelCount() -> Int {
+        lock.withLock {
+            cancels
+        }
+    }
+}
+
 private struct FakeLiveWebSocket: WebexRealtimeWebSocket {
     func connect() async throws {}
     func send(text: String) async throws {}
@@ -250,6 +409,40 @@ private struct FakeLiveWebSocket: WebexRealtimeWebSocket {
         throw CancellationError()
     }
     func cancel() {}
+}
+
+private final class InspectableFakeWebSocket: WebexRealtimeWebSocket, @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancels = 0
+
+    func connect() async throws {}
+    func send(text: String) async throws {}
+    func receiveText() async throws -> String {
+        throw CancellationError()
+    }
+    func cancel() {
+        lock.withLock {
+            cancels += 1
+        }
+    }
+
+    func cancelCount() -> Int {
+        lock.withLock {
+            cancels
+        }
+    }
+}
+
+private actor TokenInvalidatorSpy {
+    private var invalidations = 0
+
+    func invalidate() {
+        invalidations += 1
+    }
+
+    func count() -> Int {
+        invalidations
+    }
 }
 
 private struct NoopHTTPClient: HTTPClient {

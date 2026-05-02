@@ -190,11 +190,32 @@ internal final class WebexRealtimeLiveConnectionSource: WebexRealtimeConnectionS
         } catch is CancellationError {
             streamState.finish()
         } catch let error as WebexSDKError {
+            await invalidateTokenIfNeeded(for: error)
             streamState.yield(.failed(error))
             streamState.finish()
         } catch {
             streamState.yield(.failed(.network("Webex realtime connection failed: \(Redactor.redactSecrets(error.localizedDescription))")))
             streamState.finish()
+        }
+    }
+
+    private func invalidateTokenIfNeeded(for error: WebexSDKError) async {
+        switch error.apiErrorKind {
+        case .unauthorized, .forbidden:
+            await tokenInvalidator()
+        case .badRequest,
+             .notFound,
+             .methodNotAllowed,
+             .conflict,
+             .gone,
+             .unsupportedMediaType,
+             .locked,
+             .preconditionRequired,
+             .rateLimited,
+             .serverError,
+             .unexpected,
+             nil:
+            return
         }
     }
 }

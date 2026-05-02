@@ -8,35 +8,23 @@ internal protocol WebexRealtimeConnectionSource: Sendable {
 }
 
 public final class WebexRealtimeConnection: @unchecked Sendable {
-    public let events: AsyncStream<WebexRealtimeEvent>
-    public let states: AsyncStream<WebexRealtimeConnectionState>
-    public let triggers: AsyncStream<WebexStreamTrigger>
+    public var events: AsyncStream<WebexRealtimeEvent> {
+        streamState.eventStream()
+    }
+
+    public var states: AsyncStream<WebexRealtimeConnectionState> {
+        streamState.stateStream()
+    }
+
+    public var triggers: AsyncStream<WebexStreamTrigger> {
+        streamState.triggerStream()
+    }
 
     private let source: WebexRealtimeConnectionSource
     private let streamState = WebexRealtimeConnectionStreamState()
 
     internal init(source: WebexRealtimeConnectionSource) {
         self.source = source
-
-        var eventContinuation: AsyncStream<WebexRealtimeEvent>.Continuation?
-        var stateContinuation: AsyncStream<WebexRealtimeConnectionState>.Continuation?
-        var triggerContinuation: AsyncStream<WebexStreamTrigger>.Continuation?
-
-        self.events = AsyncStream { continuation in
-            eventContinuation = continuation
-        }
-        self.states = AsyncStream { continuation in
-            stateContinuation = continuation
-        }
-        self.triggers = AsyncStream { continuation in
-            triggerContinuation = continuation
-        }
-
-        streamState.setContinuations(
-            events: eventContinuation,
-            states: stateContinuation,
-            triggers: triggerContinuation
-        )
 
         let eventTask = Task { [source, streamState] in
             for await event in source.events {
@@ -56,30 +44,41 @@ public final class WebexRealtimeConnection: @unchecked Sendable {
         streamState.setTasks(eventTask: eventTask, stateTask: stateTask)
     }
 
+    deinit {
+        cancel()
+    }
+
     public func cancel() {
-        source.cancel()
-        streamState.cancel()
+        if streamState.cancel() {
+            source.cancel()
+        }
     }
 }
 
 private final class WebexRealtimeConnectionStreamState: @unchecked Sendable {
     private let lock = NSLock()
-    private var eventContinuation: AsyncStream<WebexRealtimeEvent>.Continuation?
-    private var stateContinuation: AsyncStream<WebexRealtimeConnectionState>.Continuation?
-    private var triggerContinuation: AsyncStream<WebexStreamTrigger>.Continuation?
+    private var eventContinuations: [UUID: AsyncStream<WebexRealtimeEvent>.Continuation] = [:]
+    private var stateContinuations: [UUID: AsyncStream<WebexRealtimeConnectionState>.Continuation] = [:]
+    private var triggerContinuations: [UUID: AsyncStream<WebexStreamTrigger>.Continuation] = [:]
     private var eventTask: Task<Void, Never>?
     private var stateTask: Task<Void, Never>?
     private var isFinished = false
 
-    func setContinuations(
-        events: AsyncStream<WebexRealtimeEvent>.Continuation?,
-        states: AsyncStream<WebexRealtimeConnectionState>.Continuation?,
-        triggers: AsyncStream<WebexStreamTrigger>.Continuation?
-    ) {
-        lock.withLock {
-            eventContinuation = events
-            stateContinuation = states
-            triggerContinuation = triggers
+    func eventStream() -> AsyncStream<WebexRealtimeEvent> {
+        AsyncStream { continuation in
+            addEventContinuation(continuation)
+        }
+    }
+
+    func stateStream() -> AsyncStream<WebexRealtimeConnectionState> {
+        AsyncStream { continuation in
+            addStateContinuation(continuation)
+        }
+    }
+
+    func triggerStream() -> AsyncStream<WebexStreamTrigger> {
+        AsyncStream { continuation in
+            addTriggerContinuation(continuation)
         }
     }
 
@@ -91,60 +90,78 @@ private final class WebexRealtimeConnectionStreamState: @unchecked Sendable {
     }
 
     func yield(_ event: WebexRealtimeEvent) {
-        lock.withLock {
-            _ = eventContinuation?.yield(event)
+        let continuations = lock.withLock {
+            Array(eventContinuations.values)
+        }
+
+        for continuation in continuations {
+            continuation.yield(event)
         }
     }
 
     func yield(_ state: WebexRealtimeConnectionState) {
-        lock.withLock {
-            _ = stateContinuation?.yield(state)
+        let continuations = lock.withLock {
+            Array(stateContinuations.values)
+        }
+
+        for continuation in continuations {
+            continuation.yield(state)
         }
     }
 
     func yield(_ trigger: WebexStreamTrigger) {
-        lock.withLock {
-            _ = triggerContinuation?.yield(trigger)
+        let continuations = lock.withLock {
+            Array(triggerContinuations.values)
+        }
+
+        for continuation in continuations {
+            continuation.yield(trigger)
         }
     }
 
     func finishEventsAndTriggers() {
         let continuations = lock.withLock {
-            let continuations = (eventContinuation, triggerContinuation)
-            eventContinuation = nil
-            triggerContinuation = nil
+            let continuations = (Array(eventContinuations.values), Array(triggerContinuations.values))
+            eventContinuations.removeAll()
+            triggerContinuations.removeAll()
             return continuations
         }
 
-        continuations.0?.finish()
-        continuations.1?.finish()
+        continuations.0.forEach { $0.finish() }
+        continuations.1.forEach { $0.finish() }
     }
 
     func finishStates() {
-        let continuation = lock.withLock {
-            let continuation = stateContinuation
-            stateContinuation = nil
-            return continuation
+        let continuations = lock.withLock {
+            let continuations = Array(stateContinuations.values)
+            stateContinuations.removeAll()
+            return continuations
         }
 
-        continuation?.finish()
+        continuations.forEach { $0.finish() }
     }
 
-    func cancel() {
+    func cancel() -> Bool {
         let snapshot = lock.withLock {
             guard !isFinished else {
-                return (nil as AsyncStream<WebexRealtimeEvent>.Continuation?,
-                        nil as AsyncStream<WebexRealtimeConnectionState>.Continuation?,
-                        nil as AsyncStream<WebexStreamTrigger>.Continuation?,
+                return ([] as [AsyncStream<WebexRealtimeEvent>.Continuation],
+                        [] as [AsyncStream<WebexRealtimeConnectionState>.Continuation],
+                        [] as [AsyncStream<WebexStreamTrigger>.Continuation],
                         nil as Task<Void, Never>?,
                         nil as Task<Void, Never>?)
             }
 
             isFinished = true
-            let snapshot = (eventContinuation, stateContinuation, triggerContinuation, eventTask, stateTask)
-            eventContinuation = nil
-            stateContinuation = nil
-            triggerContinuation = nil
+            let snapshot = (
+                Array(eventContinuations.values),
+                Array(stateContinuations.values),
+                Array(triggerContinuations.values),
+                eventTask,
+                stateTask
+            )
+            eventContinuations.removeAll()
+            stateContinuations.removeAll()
+            triggerContinuations.removeAll()
             eventTask = nil
             stateTask = nil
             return snapshot
@@ -152,8 +169,81 @@ private final class WebexRealtimeConnectionStreamState: @unchecked Sendable {
 
         snapshot.3?.cancel()
         snapshot.4?.cancel()
-        snapshot.0?.finish()
-        snapshot.1?.finish()
-        snapshot.2?.finish()
+        snapshot.0.forEach { $0.finish() }
+        snapshot.1.forEach { $0.finish() }
+        snapshot.2.forEach { $0.finish() }
+        return snapshot.3 != nil || snapshot.4 != nil || !snapshot.0.isEmpty || !snapshot.1.isEmpty || !snapshot.2.isEmpty
+    }
+
+    private func addEventContinuation(_ continuation: AsyncStream<WebexRealtimeEvent>.Continuation) {
+        let id = UUID()
+        let shouldFinish = lock.withLock {
+            guard !isFinished else {
+                return true
+            }
+
+            eventContinuations[id] = continuation
+            return false
+        }
+        continuation.onTermination = { [weak self] _ in
+            self?.removeEventContinuation(id: id)
+        }
+        if shouldFinish {
+            continuation.finish()
+        }
+    }
+
+    private func addStateContinuation(_ continuation: AsyncStream<WebexRealtimeConnectionState>.Continuation) {
+        let id = UUID()
+        let shouldFinish = lock.withLock {
+            guard !isFinished else {
+                return true
+            }
+
+            stateContinuations[id] = continuation
+            return false
+        }
+        continuation.onTermination = { [weak self] _ in
+            self?.removeStateContinuation(id: id)
+        }
+        if shouldFinish {
+            continuation.finish()
+        }
+    }
+
+    private func addTriggerContinuation(_ continuation: AsyncStream<WebexStreamTrigger>.Continuation) {
+        let id = UUID()
+        let shouldFinish = lock.withLock {
+            guard !isFinished else {
+                return true
+            }
+
+            triggerContinuations[id] = continuation
+            return false
+        }
+        continuation.onTermination = { [weak self] _ in
+            self?.removeTriggerContinuation(id: id)
+        }
+        if shouldFinish {
+            continuation.finish()
+        }
+    }
+
+    private func removeEventContinuation(id: UUID) {
+        lock.withLock {
+            eventContinuations[id] = nil
+        }
+    }
+
+    private func removeStateContinuation(id: UUID) {
+        lock.withLock {
+            stateContinuations[id] = nil
+        }
+    }
+
+    private func removeTriggerContinuation(id: UUID) {
+        lock.withLock {
+            triggerContinuations[id] = nil
+        }
     }
 }
