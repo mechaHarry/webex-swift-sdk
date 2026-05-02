@@ -25,9 +25,9 @@ The SDK should keep endpoint wrappers wire-faithful:
 - Snapshot Streams should refresh through the existing authenticated REST APIs
   after a trigger, because REST remains the authoritative resource shape.
 
-Do not describe this SDK layer as fully real-time until trigger delivery,
-signature verification, and stream reconciliation have been exercised in an app
-or smoke target.
+Native WebSocket trigger delivery now exists as an experimental Swift source,
+but do not describe Snapshot Streams as pure real-time data sources until stream
+reconciliation has been exercised in app examples.
 
 ## Webhooks API Shape
 
@@ -175,18 +175,49 @@ keeps returning successful HTTP responses. This means:
   adapters, but it should not claim a localhost-only Webhook listener is a full
   Webex webhook solution.
 
-## Websocket Notes
+## WebSocket Trigger Source
+
+The SDK has experimental native Swift WebSocket realtime support. The public
+entry point is:
+
+```swift
+let connection = try await client.realtime.connect(options: options)
+```
+
+`WebexRealtimeConnection` exposes:
+
+- `events`
+- `triggers`
+- `states`
+- `cancel()`
+
+This support is receive-only. It listens for Webex events and maps them into
+SDK models/triggers. It is not an official replacement for documented Webex
+REST endpoints, and resource reads/writes should continue to use the REST API
+groups.
+
+The implementation is sample-backed and experimental. It uses U2C/WDM device
+discovery, `URLSessionWebSocketTask`, authorization frames, ack frames,
+reconnect/backoff, stale-device retry, auth retry, unknown event preservation,
+unknown payload preservation, and trigger mapping.
+
+Currently modeled realtime resources/events:
+
+- `messages`
+- `rooms` / spaces
+- `memberships`
+- `attachmentActions`
+
+Unknown resources and events must remain preserved so newer Webex event shapes
+do not break decoding.
+
+The smoke target is `Examples/WebexRealtimeEventsSmoke`. Raw unknown payload
+printing is opt-in and must stay redacted by default.
 
 The official 2025 Webex blog describes websocket listening through the Webex
-JavaScript SDK, not a simple Webex REST endpoint. It says websocket listeners
-can be created for memberships, rooms, messages, and attachment actions with
-SDK resource `listen()` and `on()` methods, and that this avoids the public
-`targetUrl` requirement of webhooks.
-
-For this Swift SDK, do not assume those JavaScript SDK internals are directly
-portable. Future work should research whether Webex exposes a documented,
-supported websocket protocol or Swift-friendly transport contract. Until then,
-webhooks are the first concrete trigger source for this package.
+JavaScript SDK, not a simple Webex REST endpoint. Keep the Swift support honest:
+it is useful for app-friendly realtime triggers, but the protocol contract is
+not documented as a general public REST replacement.
 
 ## Stream Integration
 
@@ -199,20 +230,29 @@ webhooks are the first concrete trigger source for this package.
 - `actorID`
 
 Webhook notifications can create a trigger from their metadata and `data`
-object. Snapshot Streams accept an `AsyncStream<WebexStreamTrigger>` and a
-predicate:
+object. Native WebSocket connections can provide the same trigger shape through
+`connection.triggers`. Snapshot Streams accept an
+`AsyncStream<WebexStreamTrigger>` and a predicate:
 
 ```swift
-let task = messagesStream.refreshOnTriggers(webhookTriggers) { trigger in
+let connection = try await client.realtime.connect(options: options)
+
+let task = messagesStream.refreshOnTriggers(connection.triggers) { trigger in
     trigger.resource == "messages" && trigger.roomID == selectedRoomID
 }
 ```
 
 The UI still subscribes to `stream.snapshots` and redraws only when a new
 snapshot is emitted. The UI does not need to know whether the refresh came from
-a button, webhook, future websocket listener, or another trigger source.
+a button, webhook, WebSocket connection, or another trigger source.
+
+Webhooks remain relevant for integrations that need Webex to call a public
+`targetUrl`, server-side fanout, or official target URL-based delivery. The
+WebSocket source is the current experimental app-friendly foundation for this
+SDK iteration.
 
 Cancel the returned `Task` when the owning app object or window closes.
+Cancel the realtime `connection` when the app no longer needs event delivery.
 
 ## Test Requirements
 
@@ -228,3 +268,11 @@ Cancel the returned `Task` when the owning app object or window closes.
 - Verify webhook notifications become stream triggers.
 - Verify `WebexSnapshotStream.refreshOnTriggers` refreshes on matching
   triggers and ignores non-matching triggers.
+- Verify realtime resource/event models preserve unknown values and payloads.
+- Verify U2C/WDM device discovery and stale-device retry behavior.
+- Verify WebSocket session authorization, ack frames, reconnect/backoff, and
+  auth retry behavior.
+- Verify realtime event decoding maps modeled resources into stream triggers.
+- Verify unknown realtime payload printing is opt-in and redacted by default.
+- Verify `Examples/WebexRealtimeEventsSmoke` builds and can be used for live
+  smoke validation when credentials are available.
