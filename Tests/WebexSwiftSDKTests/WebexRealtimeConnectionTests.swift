@@ -53,6 +53,39 @@ final class WebexRealtimeConnectionTests: XCTestCase {
         XCTAssertNil(event)
     }
 
+    func testLateEventAndTriggerSubscribersFinishAfterSourceEventsComplete() async throws {
+        let source = FakeRealtimeConnectionSource()
+        let connection = WebexRealtimeConnection(source: source)
+        var firstEventIterator = connection.events.makeAsyncIterator()
+
+        source.finishEvents()
+        let firstEvent = await firstEventIterator.next()
+
+        var lateEventIterator = connection.events.makeAsyncIterator()
+        var lateTriggerIterator = connection.triggers.makeAsyncIterator()
+        let lateEvent = await lateEventIterator.next()
+        let lateTrigger = await lateTriggerIterator.next()
+
+        XCTAssertNil(firstEvent)
+        XCTAssertNil(lateEvent)
+        XCTAssertNil(lateTrigger)
+    }
+
+    func testLateStateSubscriberFinishesAfterSourceStatesComplete() async throws {
+        let source = FakeRealtimeConnectionSource()
+        let connection = WebexRealtimeConnection(source: source)
+        var firstStateIterator = connection.states.makeAsyncIterator()
+
+        source.finishStates()
+        let firstState = await firstStateIterator.next()
+
+        var lateStateIterator = connection.states.makeAsyncIterator()
+        let lateState = await lateStateIterator.next()
+
+        XCTAssertNil(firstState)
+        XCTAssertNil(lateState)
+    }
+
     func testConnectionDeinitCancelsSource() async throws {
         let source = FakeRealtimeConnectionSource()
         var connection: WebexRealtimeConnection? = WebexRealtimeConnection(source: source)
@@ -309,6 +342,26 @@ private final class FakeRealtimeConnectionSource: WebexRealtimeConnectionSource,
 
         continuations.0?.finish()
         continuations.1?.finish()
+    }
+
+    func finishEvents() {
+        let continuation = lock.withLock {
+            let continuation = eventContinuation
+            eventContinuation = nil
+            return continuation
+        }
+
+        continuation?.finish()
+    }
+
+    func finishStates() {
+        let continuation = lock.withLock {
+            let continuation = stateContinuation
+            stateContinuation = nil
+            return continuation
+        }
+
+        continuation?.finish()
     }
 
     func cancelCount() -> Int {

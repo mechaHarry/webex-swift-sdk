@@ -63,6 +63,8 @@ private final class WebexRealtimeConnectionStreamState: @unchecked Sendable {
     private var eventTask: Task<Void, Never>?
     private var stateTask: Task<Void, Never>?
     private var isFinished = false
+    private var areEventsAndTriggersFinished = false
+    private var areStatesFinished = false
 
     func eventStream() -> AsyncStream<WebexRealtimeEvent> {
         AsyncStream { continuation in
@@ -122,6 +124,7 @@ private final class WebexRealtimeConnectionStreamState: @unchecked Sendable {
     func finishEventsAndTriggers() {
         let continuations = lock.withLock {
             let continuations = (Array(eventContinuations.values), Array(triggerContinuations.values))
+            areEventsAndTriggersFinished = true
             eventContinuations.removeAll()
             triggerContinuations.removeAll()
             return continuations
@@ -134,6 +137,7 @@ private final class WebexRealtimeConnectionStreamState: @unchecked Sendable {
     func finishStates() {
         let continuations = lock.withLock {
             let continuations = Array(stateContinuations.values)
+            areStatesFinished = true
             stateContinuations.removeAll()
             return continuations
         }
@@ -152,6 +156,8 @@ private final class WebexRealtimeConnectionStreamState: @unchecked Sendable {
             }
 
             isFinished = true
+            areEventsAndTriggersFinished = true
+            areStatesFinished = true
             let snapshot = (
                 Array(eventContinuations.values),
                 Array(stateContinuations.values),
@@ -178,7 +184,7 @@ private final class WebexRealtimeConnectionStreamState: @unchecked Sendable {
     private func addEventContinuation(_ continuation: AsyncStream<WebexRealtimeEvent>.Continuation) {
         let id = UUID()
         let shouldFinish = lock.withLock {
-            guard !isFinished else {
+            guard !isFinished, !areEventsAndTriggersFinished else {
                 return true
             }
 
@@ -196,7 +202,7 @@ private final class WebexRealtimeConnectionStreamState: @unchecked Sendable {
     private func addStateContinuation(_ continuation: AsyncStream<WebexRealtimeConnectionState>.Continuation) {
         let id = UUID()
         let shouldFinish = lock.withLock {
-            guard !isFinished else {
+            guard !isFinished, !areStatesFinished else {
                 return true
             }
 
@@ -214,7 +220,7 @@ private final class WebexRealtimeConnectionStreamState: @unchecked Sendable {
     private func addTriggerContinuation(_ continuation: AsyncStream<WebexStreamTrigger>.Continuation) {
         let id = UUID()
         let shouldFinish = lock.withLock {
-            guard !isFinished else {
+            guard !isFinished, !areEventsAndTriggersFinished else {
                 return true
             }
 
