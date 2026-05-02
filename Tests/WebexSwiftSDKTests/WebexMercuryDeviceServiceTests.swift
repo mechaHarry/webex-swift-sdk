@@ -196,6 +196,38 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
         ])
     }
 
+    func testWDMDeviceListFailureIdentifiesOperation() async throws {
+        let httpClient = MockMercuryDeviceHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            url: URL(string: "https://u2c.wbx2.com/u2c/api/v1/catalog?format=hostmap")!,
+            statusCode: 200,
+            body: #"{"serviceLinks":{"wdm":"https://wdm.example.com/wdm/api/v1"}}"#
+        ))
+        await httpClient.enqueue(response: httpResponse(
+            url: URL(string: "https://wdm.example.com/wdm/api/v1/devices")!,
+            statusCode: 403,
+            headers: ["TrackingID": "ROUTERGW_test"],
+            body: #"{}"#
+        ))
+        let service = makeService(httpClient: httpClient, retryPolicy: RetryPolicy(maxAttempts: 1, baseDelay: 0, jitter: 0, maximumDelay: 10))
+
+        do {
+            _ = try await service.device(options: WebexRealtimeOptions(deviceName: "desk"))
+            XCTFail("Expected WDM device list error")
+        } catch let error as WebexSDKError {
+            guard case .webexAPI(let statusCode, let trackingID, let message) = error else {
+                XCTFail("Expected webexAPI error, got \(error)")
+                return
+            }
+
+            XCTAssertEqual(statusCode, 403)
+            XCTAssertEqual(trackingID, "ROUTERGW_test")
+            XCTAssertTrue(message.contains("WDM device list"), message)
+            XCTAssertFalse(message.contains("realtime-token"))
+            XCTAssertFalse(message.contains("wdm.example.com"))
+        }
+    }
+
     private func makeService(
         httpClient: HTTPClient,
         retryPolicy: RetryPolicy = RetryPolicy(maxAttempts: 3, baseDelay: 0, jitter: 0, maximumDelay: 10),

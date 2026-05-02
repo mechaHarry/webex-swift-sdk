@@ -61,7 +61,11 @@ internal struct WebexMercuryDeviceService: Sendable {
 
         let wdmURL = try await discoverWDMURL()
         let devicesURL = try devicesURL(from: wdmURL)
-        let devices = try await sendJSON(DeviceListResponse.self, request: makeRequest(url: devicesURL))
+        let devices = try await sendJSON(
+            DeviceListResponse.self,
+            request: makeRequest(url: devicesURL),
+            operation: "WDM device list"
+        )
             .deviceList
 
         let selectedDevice: WebexMercuryDevice
@@ -71,7 +75,8 @@ internal struct WebexMercuryDeviceService: Sendable {
             let body = DeviceCreateRequest(deviceName: options.deviceName)
             selectedDevice = try await sendJSON(
                 DeviceResponse.self,
-                request: makeRequest(url: devicesURL, method: "POST", body: JSONEncoder().encode(body))
+                request: makeRequest(url: devicesURL, method: "POST", body: JSONEncoder().encode(body)),
+                operation: "WDM device create"
             )
             .webexMercuryDevice()
         }
@@ -97,7 +102,11 @@ internal struct WebexMercuryDeviceService: Sendable {
             throw WebexSDKError.network("Invalid Webex realtime U2C URL")
         }
 
-        let response = try await sendJSON(U2CCatalogResponse.self, request: makeRequest(url: url))
+        let response = try await sendJSON(
+            U2CCatalogResponse.self,
+            request: makeRequest(url: url),
+            operation: "U2C catalog"
+        )
         guard let wdmURL = URL(string: response.serviceLinks.wdm),
               wdmURL.scheme?.lowercased() == "https",
               wdmURL.host != nil else {
@@ -139,8 +148,12 @@ internal struct WebexMercuryDeviceService: Sendable {
         return request
     }
 
-    private func sendJSON<Response: Decodable>(_ type: Response.Type, request: URLRequest) async throws -> Response {
-        let response = try await send(request)
+    private func sendJSON<Response: Decodable>(
+        _ type: Response.Type,
+        request: URLRequest,
+        operation: String
+    ) async throws -> Response {
+        let response = try await send(request, operation: operation)
         do {
             return try JSONDecoder().decode(Response.self, from: response.data)
         } catch {
@@ -148,7 +161,7 @@ internal struct WebexMercuryDeviceService: Sendable {
         }
     }
 
-    private func send(_ originalRequest: URLRequest) async throws -> HTTPResponse {
+    private func send(_ originalRequest: URLRequest, operation: String) async throws -> HTTPResponse {
         var attempt = 1
         var lastAccessToken: String?
 
@@ -180,7 +193,7 @@ internal struct WebexMercuryDeviceService: Sendable {
             }
 
             guard shouldRetry(response: response, attempt: attempt) else {
-                throw responseError(for: response, accessToken: accessToken)
+                throw responseError(for: response, operation: operation, accessToken: accessToken)
             }
 
             try await sleepBeforeRetry(retryDelay(for: response, attempt: attempt))
@@ -226,7 +239,7 @@ internal struct WebexMercuryDeviceService: Sendable {
         }
     }
 
-    private func responseError(for response: HTTPResponse, accessToken: String) -> WebexSDKError {
+    private func responseError(for response: HTTPResponse, operation: String, accessToken: String) -> WebexSDKError {
         if response.response.statusCode == 429 {
             return .rateLimited(retryAfter: retryPolicy.retryAfter(from: response.response))
         }
@@ -234,19 +247,19 @@ internal struct WebexMercuryDeviceService: Sendable {
         return .webexAPI(
             statusCode: response.response.statusCode,
             trackingID: trackingID(from: response.response).map { redact($0, accessToken: accessToken) },
-            message: responseMessage(from: response, accessToken: accessToken)
+            message: responseMessage(from: response, operation: operation, accessToken: accessToken)
         )
     }
 
-    private func responseMessage(from response: HTTPResponse, accessToken: String) -> String {
-        let fallback = "Webex realtime request returned HTTP \(response.response.statusCode)"
+    private func responseMessage(from response: HTTPResponse, operation: String, accessToken: String) -> String {
+        let fallback = "Webex realtime \(operation) request returned HTTP \(response.response.statusCode)"
         guard let json = try? JSONSerialization.jsonObject(with: response.data) as? [String: Any],
               let message = json["message"] as? String,
               !message.isEmpty else {
             return fallback
         }
 
-        return redact(message, accessToken: accessToken)
+        return "\(fallback): \(redact(message, accessToken: accessToken))"
     }
 
     private func trackingID(from response: HTTPURLResponse) -> String? {
