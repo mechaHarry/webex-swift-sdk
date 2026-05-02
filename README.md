@@ -165,3 +165,4 @@ try await client.messages.delete(messageID: edited.id)
 - `Examples/WebexSpacesListSmoke`: interactive OAuth smoke test that lists Spaces with explicit bounded pagination.
 - `Examples/WebexMembershipsListSmoke`: interactive OAuth smoke test that lists Memberships for `WEBEX_ROOM_ID` with explicit bounded pagination.
 - `Examples/WebexMessagesListSmoke`: interactive OAuth smoke test that lists Messages for `WEBEX_ROOM_ID` with explicit bounded pagination.
+- `Examples/WebexMessagesStreamWindowSmoke`: native SwiftUI smoke window that subscribes to `MessagesStream` snapshots and refreshes messages through the stream.
