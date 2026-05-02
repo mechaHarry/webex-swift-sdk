@@ -38,6 +38,27 @@ final class WebexMercuryWebSocketSessionTests: XCTestCase {
         XCTAssertEqual(webSocket.cancelCount(), 1)
     }
 
+    func testStreamTerminationCancelsSocket() async throws {
+        let webSocket = FakeWebSocket()
+        webSocket.enqueueReceive(.success(#"{"type":"event"}"#))
+        let session = makeSession(webSocket: webSocket)
+
+        let consumer = Task<String?, Error> {
+            for try await frame in session.frames() {
+                return frame
+            }
+
+            return nil
+        }
+
+        let frame = try await consumer.value
+
+        XCTAssertEqual(frame, #"{"type":"event"}"#)
+        try await eventually {
+            webSocket.cancelCount() == 1
+        }
+    }
+
     func testStreamErrorDescriptionRedactsAccessToken() async throws {
         let webSocket = FakeWebSocket()
         webSocket.enqueueReceive(.failure(WebexSDKError.network("secret access-token")))
@@ -64,6 +85,22 @@ final class WebexMercuryWebSocketSessionTests: XCTestCase {
                 )
             }
         )
+    }
+
+    private func eventually(
+        timeout: Duration = .seconds(1),
+        predicate: @escaping @Sendable () -> Bool
+    ) async throws {
+        let start = ContinuousClock.now
+
+        while !predicate() {
+            if start.duration(to: ContinuousClock.now) >= timeout {
+                XCTFail("Condition was not satisfied before timeout")
+                return
+            }
+
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 }
 
