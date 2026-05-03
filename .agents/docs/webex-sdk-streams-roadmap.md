@@ -27,7 +27,7 @@ A Snapshot Stream should be explicit about being stateful:
 - it emits only reconciled snapshots
 - it can refresh or load another page without clearing the current state
 - it exposes pagination state instead of hiding pagination
-- it can later accept real-time invalidation triggers without changing the UI
+- it can accept real-time invalidation triggers without changing the UI
   contract
 
 ## Delivery Order
@@ -41,12 +41,15 @@ A Snapshot Stream should be explicit about being stateful:
    - `SpacesStream`
    - `MessagesStream`
    - `MembershipsStream`
-3. Research and implement Webex real-time trigger sources:
-   - webhooks
-   - websocket or push-style transports, if available and appropriate
-4. Wire real-time triggers into existing streams.
-5. Deprecate or disable cadenced polling once real-time triggers are reliable.
-6. Continue REST coverage for broader API groups:
+3. Use the experimental native WebSocket realtime foundation now implemented:
+   - `client.realtime.connect(options:)`
+   - `WebexRealtimeConnection.events`
+   - `WebexRealtimeConnection.triggers`
+   - `WebexRealtimeConnection.states`
+4. Keep webhooks as the official public `targetUrl` integration path.
+5. Wire `connection.triggers` into existing streams in app examples.
+6. Deprecate or disable cadenced polling once realtime triggers are reliable.
+7. Continue REST coverage for broader API groups:
    - Attachments
    - Room Tabs
    - Teams
@@ -64,8 +67,9 @@ Initial implementation status:
 - `SpacesAPI.stream(params:pageLimit:)`, `MessagesAPI.stream(params:pageLimit:)`,
   and `MembershipsAPI.stream(params:pageLimit:)` adapt the existing endpoint
   wrappers without bypassing `WebexTransport`.
-- Streams currently support explicit `refresh()` and `loadNextPage()` only.
-  They are snapshot/state streams, not real-time streams.
+- Streams support explicit `refresh()`, `loadNextPage()`, and trigger-driven
+  refresh hooks. They are snapshot/state streams, not pure realtime data
+  sources.
 
 A stream should expose immutable snapshots. The app/UI subscribes to snapshots
 and redraws when a new snapshot is emitted.
@@ -170,18 +174,27 @@ Initial implementation may support:
 
 - manual refresh
 - `loadNextPage()`
+- `connection.triggers` from an experimental `WebexRealtimeConnection`
+- webhook invalidation for public target URL-based integrations
 - provisional cadenced polling only if needed for a usable early UI
 
 Polling is not the strategic real-time design. Treat it as temporary and avoid
 marketing or docs that call polling-backed streams "real-time".
 
-Later trigger sources can include:
-
-- webhook invalidation
-- websocket or other push-style transports
-
 These triggers should notify the stream to refresh or reconcile. They should not
 be the UI-facing data contract by themselves.
+
+The WebSocket implementation is the current experimental app-friendly realtime
+foundation. It is receive-only, sample-backed, and not an official replacement
+for documented REST endpoints. Webhooks remain relevant when an integration
+needs Webex to deliver events to a public `targetUrl`.
+
+Live smoke validation has connected with a direct developer token and with an
+OAuth integration token once Webex granted `spark:all spark:kms`. Do not
+describe realtime failures as stream problems until token grants are checked:
+Webex can return a narrower OAuth token than the app requested, and a token
+granted only REST scopes such as `spark:people_read` can fail WDM registration
+with HTTP 403 before a WebSocket exists.
 
 ## Naming
 
@@ -200,8 +213,8 @@ Avoid names that imply a hidden REST operation:
 - `listPages`
 - generic iterable wrappers that look like Webex endpoint semantics
 
-Until Webex push/event triggers are implemented and verified, describe this
-layer as "snapshot streams" or "state streams", not "real-time streams".
+Even with WebSocket triggers available, describe this layer as "snapshot
+streams" or "state streams", not "real-time streams".
 
 ## API Group Fit
 
@@ -230,3 +243,12 @@ Snapshots and errors must not expose tokens, authorization codes, refresh
 tokens, client secrets, or full callback URLs. Domain data such as space titles,
 person names, and message content should be treated as user data and only
 emitted to the local app subscriber.
+
+## Next Steps
+
+1. Capture live event payloads with `Examples/WebexRealtimeEventsSmoke`,
+   especially unknown payloads after message/space create, update, and delete
+   actions.
+2. Wire `connection.triggers` into Snapshot Streams in app examples.
+3. Keep polling deprecated or temporary while realtime validation continues.
+4. Continue broader REST group coverage after the stream trigger path is proven.

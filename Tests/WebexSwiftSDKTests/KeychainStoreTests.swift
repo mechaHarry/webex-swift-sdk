@@ -89,6 +89,59 @@ final class KeychainStoreServiceTests: XCTestCase {
         XCTAssertTrue(service.unicodeScalars.allSatisfy { safeCharacters.contains($0) })
     }
 
+    func testDataProtectionKeychainQueriesOptIntoDataProtectionKeychain() {
+        let query = KeychainWebexStoreQuery(
+            service: "service",
+            account: "account",
+            storage: .dataProtection
+        )
+
+        XCTAssertEqual(query.base[kSecUseDataProtectionKeychain as String] as? Bool, true)
+        XCTAssertEqual(query.load[kSecUseDataProtectionKeychain as String] as? Bool, true)
+        XCTAssertEqual(query.add(data: Data())[kSecUseDataProtectionKeychain as String] as? Bool, true)
+    }
+
+    func testLegacyKeychainQueriesDoNotUseDataProtectionKeychain() {
+        let query = KeychainWebexStoreQuery(
+            service: "service",
+            account: "account",
+            storage: .legacy
+        )
+
+        XCTAssertNil(query.base[kSecUseDataProtectionKeychain as String])
+        XCTAssertNil(query.load[kSecUseDataProtectionKeychain as String])
+        XCTAssertNil(query.add(data: Data())[kSecUseDataProtectionKeychain as String])
+    }
+
+    func testAutomaticKeychainStorageDefinesDataProtectionThenLegacyFallbackOrder() {
+        XCTAssertEqual(KeychainWebexStoreStorage.automatic.queryStorages, [.dataProtection, .legacy])
+        XCTAssertEqual(KeychainWebexStoreStorage.dataProtection.queryStorages, [.dataProtection])
+        XCTAssertEqual(KeychainWebexStoreStorage.legacy.queryStorages, [.legacy])
+    }
+
+    func testAutomaticKeychainStorageFallsBackOnlyForMissingDataProtectionEntitlement() {
+        XCTAssertTrue(KeychainWebexStoreStorage.automatic.shouldFallbackToLegacy(
+            after: OSStatus(-34018),
+            from: .dataProtection
+        ))
+        XCTAssertTrue(KeychainWebexStoreStorage.automatic.shouldFallbackToLegacy(
+            after: OSStatus(34018),
+            from: .dataProtection
+        ))
+        XCTAssertFalse(KeychainWebexStoreStorage.automatic.shouldFallbackToLegacy(
+            after: errSecAuthFailed,
+            from: .dataProtection
+        ))
+        XCTAssertFalse(KeychainWebexStoreStorage.automatic.shouldFallbackToLegacy(
+            after: OSStatus(-34018),
+            from: .legacy
+        ))
+        XCTAssertFalse(KeychainWebexStoreStorage.dataProtection.shouldFallbackToLegacy(
+            after: OSStatus(-34018),
+            from: .dataProtection
+        ))
+    }
+
     func testServiceLockDoesNotRunOperationAfterWaitingTaskIsCancelled() async throws {
         let serviceLock = KeychainWebexStoreServiceLock()
         let locked = DispatchSemaphore(value: 0)

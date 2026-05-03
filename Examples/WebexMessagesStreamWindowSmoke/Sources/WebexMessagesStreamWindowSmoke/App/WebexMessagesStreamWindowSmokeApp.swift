@@ -9,14 +9,14 @@ struct WebexMessagesStreamWindowSmokeApp: App {
         do {
             let configuration = try StreamSmokeConfiguration(environment: ProcessInfo.processInfo.environment)
             _model = StateObject(wrappedValue: MessagesStreamWindowModel(
-                streamFactory: {
-                    try await MessageStreamBootstrap.makeStream(configuration: configuration)
+                runtimeFactory: {
+                    try await MessageStreamBootstrap.makeRuntime(configuration: configuration)
                 }
             ))
         } catch {
             let startupFailure = String(describing: error)
             _model = StateObject(wrappedValue: MessagesStreamWindowModel(
-                streamFactory: {
+                runtimeFactory: {
                     throw WebexSDKError.network(startupFailure)
                 }
             ))

@@ -8,7 +8,7 @@ final class StreamSmokeConfigurationTests: XCTestCase {
         }
     }
 
-    func testConfigurationDefaultsToLoopbackMessagesReadAndSinglePageStream() throws {
+    func testConfigurationDefaultsToLoopbackRealtimeScopesAndSinglePageStream() throws {
         let configuration = try StreamSmokeConfiguration(environment: [
             "WEBEX_CLIENT_ID": "client-id",
             "WEBEX_CLIENT_SECRET": "client-secret",
@@ -18,7 +18,7 @@ final class StreamSmokeConfigurationTests: XCTestCase {
         XCTAssertEqual(configuration.integration.clientID, "client-id")
         XCTAssertEqual(configuration.integration.clientSecret, "client-secret")
         XCTAssertEqual(configuration.integration.redirectURI.absoluteString, "http://127.0.0.1:8282/oauth/callback")
-        XCTAssertEqual(configuration.integration.scopes, ["spark:messages_read"])
+        XCTAssertEqual(configuration.integration.scopes, ["spark:all", "spark:kms"])
         XCTAssertEqual(configuration.roomID, "room-id")
         XCTAssertEqual(configuration.pageSize, 25)
         XCTAssertEqual(configuration.pageLimit, 1)
@@ -59,5 +59,17 @@ final class StreamSmokeConfigurationTests: XCTestCase {
             XCTAssertFalse(description.contains(redirectURI))
             XCTAssertFalse(description.contains("/oauth/callback"))
         }
+    }
+
+    func testMissingRealtimeScopesExplainsRequestedAndGrantedScopes() {
+        let error = StreamSmokeError.missingRealtimeScopes(
+            requested: ["spark:all"],
+            granted: ["spark:people_read"]
+        )
+
+        XCTAssertEqual(
+            error.description,
+            "OAuth token is missing realtime scopes. Required: spark:all spark:kms. Requested: spark:all. Granted: spark:people_read. Update the Webex integration scopes and reauthorize."
+        )
     }
 }

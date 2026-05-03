@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 import WebexSwiftSDK
 @testable import WebexMessagesStreamWindowSmoke
@@ -11,7 +12,9 @@ final class MessagesStreamWindowModelTests: XCTestCase {
             loadFirstPage: { try await loader.loadFirstPage() },
             loadNextPage: { try await loader.loadNextPage($0) }
         )
-        let model = MessagesStreamWindowModel(streamFactory: { stream })
+        let model = MessagesStreamWindowModel(runtimeFactory: {
+            MessageStreamRuntime(stream: stream)
+        })
 
         let startTask = Task { await model.start() }
         while await loader.firstPageCallCount == 0 {
@@ -30,6 +33,7 @@ final class MessagesStreamWindowModelTests: XCTestCase {
         XCTAssertEqual(model.revision, 1)
         XCTAssertFalse(model.isRefreshing)
         XCTAssertTrue(model.canRefresh)
+        XCTAssertEqual(model.realtimeStatusText, "Realtime idle")
     }
 
     func testRefreshKeepsCurrentRowsUntilStreamPublishesNewSnapshot() async throws {
@@ -39,7 +43,9 @@ final class MessagesStreamWindowModelTests: XCTestCase {
             loadFirstPage: { try await loader.loadFirstPage() },
             loadNextPage: { try await loader.loadNextPage($0) }
         )
-        let model = MessagesStreamWindowModel(streamFactory: { stream })
+        let model = MessagesStreamWindowModel(runtimeFactory: {
+            MessageStreamRuntime(stream: stream)
+        })
 
         let startTask = Task { await model.start() }
         while await loader.firstPageCallCount == 0 {
@@ -71,13 +77,104 @@ final class MessagesStreamWindowModelTests: XCTestCase {
     }
 
     func testStartFailurePublishesSafeError() async {
-        let model = MessagesStreamWindowModel(streamFactory: {
+        let model = MessagesStreamWindowModel(runtimeFactory: {
             throw WebexSDKError.invalidAuthorizationCallback("http://127.0.0.1:8282/oauth/callback?code=secret")
         })
 
         await model.start()
 
         XCTAssertEqual(model.phase, .failed("Invalid authorization callback"))
+    }
+
+    func testRealtimeStateUpdatesStatusText() async throws {
+        let loader = ControllableMessageStreamLoader()
+        let stream = MessagesStream(
+            id: { $0.id },
+            loadFirstPage: { try await loader.loadFirstPage() },
+            loadNextPage: { try await loader.loadNextPage($0) }
+        )
+        let states = ControllableRealtimeStates()
+        let model = MessagesStreamWindowModel(runtimeFactory: {
+            MessageStreamRuntime(
+                stream: stream,
+                realtimeStates: states.stream
+            )
+        })
+
+        let startTask = Task { await model.start() }
+        while await loader.firstPageCallCount == 0 {
+            await Task.yield()
+        }
+        states.yield(.discovering)
+        await waitUntil { model.realtimeStatusText == "Realtime discovering" }
+
+        await loader.succeedFirstPage(items: [])
+        await startTask.value
+        states.yield(.connected)
+        await waitUntil { model.realtimeStatusText == "Realtime connected" }
+
+        XCTAssertEqual(model.realtimeStatusText, "Realtime connected")
+    }
+
+    func testRuntimeCancelHandlerRunsOnce() {
+        let stream = MessagesStream(
+            id: { $0.id },
+            loadFirstPage: { WebexStreamPage(items: [], nextPage: nil) },
+            loadNextPage: { _ in WebexStreamPage(items: [], nextPage: nil) }
+        )
+        let cancelCounter = CancelCounter()
+        let runtime = MessageStreamRuntime(stream: stream, cancel: {
+            cancelCounter.increment()
+        })
+
+        runtime.cancel()
+        runtime.cancel()
+
+        XCTAssertEqual(cancelCounter.count, 1)
+    }
+}
+
+final class MessageStreamBootstrapTests: XCTestCase {
+    func testShouldRefreshMessagesStreamOnlyForConfiguredRoomMessageChanges() {
+        XCTAssertTrue(MessageStreamBootstrap.shouldRefreshMessagesStream(
+            for: WebexStreamTrigger(resource: "messages", event: "created", roomID: "room-1"),
+            roomID: "room-1"
+        ))
+        XCTAssertTrue(MessageStreamBootstrap.shouldRefreshMessagesStream(
+            for: WebexStreamTrigger(resource: "messages", event: "updated", roomID: "room-1"),
+            roomID: "room-1"
+        ))
+        XCTAssertTrue(MessageStreamBootstrap.shouldRefreshMessagesStream(
+            for: WebexStreamTrigger(resource: "messages", event: "deleted", roomID: "room-1"),
+            roomID: "room-1"
+        ))
+
+        XCTAssertFalse(MessageStreamBootstrap.shouldRefreshMessagesStream(
+            for: WebexStreamTrigger(resource: "messages", event: "created", roomID: "room-2"),
+            roomID: "room-1"
+        ))
+        XCTAssertFalse(MessageStreamBootstrap.shouldRefreshMessagesStream(
+            for: WebexStreamTrigger(resource: "memberships", event: "created", roomID: "room-1"),
+            roomID: "room-1"
+        ))
+        XCTAssertFalse(MessageStreamBootstrap.shouldRefreshMessagesStream(
+            for: WebexStreamTrigger(resource: "messages", event: "seen", roomID: "room-1"),
+            roomID: "room-1"
+        ))
+    }
+
+    func testShouldRefreshMessagesStreamMatchesRealtimeUUIDAgainstEncodedRestRoomID() {
+        let roomUUID = "4f0a6580-f43b-11e9-91e4-e7caffe0d0b0"
+        let encodedRestRoomID = Data("ciscospark://us/ROOM/\(roomUUID)".utf8).base64EncodedString()
+
+        XCTAssertTrue(MessageStreamBootstrap.shouldRefreshMessagesStream(
+            for: WebexStreamTrigger(resource: "messages", event: "created", roomID: roomUUID),
+            roomID: encodedRestRoomID
+        ))
+        XCTAssertFalse(MessageStreamBootstrap.shouldRefreshMessagesStream(
+            for: WebexStreamTrigger(resource: "messages", event: "created", roomID: "6e6b9986-0b19-4d7d-8f87-bc14c5ed58ad"),
+            roomID: encodedRestRoomID
+        ))
     }
 }
 
@@ -125,5 +222,41 @@ private actor ControllableMessageStreamLoader {
             items: items,
             nextPage: nextPage
         ))
+    }
+}
+
+private final class ControllableRealtimeStates: @unchecked Sendable {
+    let stream: AsyncStream<WebexRealtimeConnectionState>
+
+    private let lock = NSLock()
+    private var continuation: AsyncStream<WebexRealtimeConnectionState>.Continuation?
+
+    init() {
+        var continuation: AsyncStream<WebexRealtimeConnectionState>.Continuation?
+        self.stream = AsyncStream { streamContinuation in
+            continuation = streamContinuation
+        }
+        self.continuation = continuation
+    }
+
+    func yield(_ state: WebexRealtimeConnectionState) {
+        _ = lock.withLock {
+            continuation?.yield(state)
+        }
+    }
+}
+
+private final class CancelCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    var count: Int {
+        lock.withLock { value }
+    }
+
+    func increment() {
+        lock.withLock {
+            value += 1
+        }
     }
 }

@@ -4,7 +4,7 @@ import WebexSwiftSDK
 
 @MainActor
 final class MessagesStreamWindowModel: ObservableObject {
-    typealias StreamFactory = @Sendable () async throws -> MessagesStream
+    typealias RuntimeFactory = @Sendable () async throws -> MessageStreamRuntime
 
     @Published private(set) var rows: [MessageRowModel] = []
     @Published private(set) var phase: Phase = .idle
@@ -15,46 +15,51 @@ final class MessagesStreamWindowModel: ObservableObject {
     @Published private(set) var capReached = false
     @Published private(set) var lastUpdatedText = "Never"
     @Published private(set) var lastErrorText: String?
+    @Published private(set) var realtimeStatusText = "Realtime idle"
 
-    private let streamFactory: StreamFactory
-    private var stream: MessagesStream?
+    private let runtimeFactory: RuntimeFactory
+    private var runtime: MessageStreamRuntime?
     private var subscriptionTask: Task<Void, Never>?
+    private var realtimeStateTask: Task<Void, Never>?
 
-    init(streamFactory: @escaping StreamFactory) {
-        self.streamFactory = streamFactory
+    init(runtimeFactory: @escaping RuntimeFactory) {
+        self.runtimeFactory = runtimeFactory
     }
 
     deinit {
         subscriptionTask?.cancel()
+        realtimeStateTask?.cancel()
+        runtime?.cancel()
     }
 
     var canRefresh: Bool {
-        stream != nil && !isRefreshing
+        runtime != nil && !isRefreshing
     }
 
     func start() async {
-        guard stream == nil else {
+        guard runtime == nil else {
             return
         }
 
         phase = .authorizing
         do {
-            let stream = try await streamFactory()
-            self.stream = stream
-            subscribe(to: stream)
+            let runtime = try await runtimeFactory()
+            self.runtime = runtime
+            subscribe(to: runtime.stream)
+            subscribeToRealtimeStates(runtime.realtimeStates)
             phase = .ready
-            await stream.refresh()
+            await runtime.stream.refresh()
         } catch {
             phase = .failed(Self.safeDescription(for: error))
         }
     }
 
     func refresh() async {
-        guard let stream else {
+        guard let runtime else {
             return
         }
 
-        await stream.refresh()
+        await runtime.stream.refresh()
     }
 
     private func subscribe(to stream: MessagesStream) {
@@ -62,6 +67,20 @@ final class MessagesStreamWindowModel: ObservableObject {
         subscriptionTask = Task { [weak self] in
             for await snapshot in stream.snapshots {
                 self?.apply(snapshot)
+            }
+        }
+    }
+
+    private func subscribeToRealtimeStates(_ states: AsyncStream<WebexRealtimeConnectionState>?) {
+        realtimeStateTask?.cancel()
+        guard let states else {
+            realtimeStatusText = "Realtime idle"
+            return
+        }
+
+        realtimeStateTask = Task { [weak self] in
+            for await state in states {
+                self?.realtimeStatusText = Self.realtimeStatusText(for: state)
             }
         }
     }
@@ -94,6 +113,27 @@ final class MessagesStreamWindowModel: ObservableObject {
         }
 
         return String(describing: error)
+    }
+
+    private static func realtimeStatusText(for state: WebexRealtimeConnectionState) -> String {
+        switch state {
+        case .disconnected:
+            return "Realtime disconnected"
+        case .discovering:
+            return "Realtime discovering"
+        case .registeringDevice:
+            return "Realtime registering device"
+        case .connecting:
+            return "Realtime connecting"
+        case .authorizing:
+            return "Realtime authorizing"
+        case .connected:
+            return "Realtime connected"
+        case .reconnecting(let attempt, let delay):
+            return "Realtime reconnecting \(attempt) in \(String(format: "%.1f", delay))s"
+        case .failed(let error):
+            return "Realtime failed: \(safeDescription(for: error))"
+        }
     }
 
     enum Phase: Equatable {
