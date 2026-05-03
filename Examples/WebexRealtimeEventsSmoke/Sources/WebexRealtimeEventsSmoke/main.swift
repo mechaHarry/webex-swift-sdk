@@ -36,6 +36,7 @@ struct WebexRealtimeEventsSmoke {
 
             print("Using Keychain service: \(keychainService)")
             print("Opening Webex authorization for client id: \(configuration.clientID)")
+            print("Requested scopes: \(configuration.scopes.joined(separator: " "))")
             let oauthAuthorized = try await registry.authorizeAndAddAccount(
                 configuration: configuration,
                 openAuthorizationURL: { authorizationURL in
@@ -60,6 +61,10 @@ struct WebexRealtimeEventsSmoke {
             print("Saved refresh token record. Access token expires at: \(authorized.accessTokenExpiresAt)")
             if let tokenRecord {
                 print("Granted scopes: \(tokenRecord.grantedScopes.joined(separator: " "))")
+                try validateGrantedOAuthScopes(
+                    requestedScopes: configuration.scopes,
+                    grantedScopes: tokenRecord.grantedScopes
+                )
             }
         }
         print("")
@@ -160,6 +165,18 @@ struct WebexRealtimeEventsSmoke {
             client: client,
             accessTokenExpiresAt: expiresAt
         )
+    }
+
+    static func validateGrantedOAuthScopes(requestedScopes: [String], grantedScopes: [String]) throws {
+        let requiredScopes = ["spark:all", "spark:kms"]
+        let grantedSet = Set(grantedScopes)
+        let missingScopes = requiredScopes.filter { !grantedSet.contains($0) }
+        guard missingScopes.isEmpty else {
+            throw RealtimeSmokeError.missingRealtimeScopes(
+                requested: requestedScopes,
+                granted: grantedScopes
+            )
+        }
     }
 
     static func failureDescription(for error: Error) -> String {
@@ -325,6 +342,7 @@ enum RealtimeSmokeError: Error, Equatable, CustomStringConvertible {
     case invalidRedirectURI
     case failedToOpenAuthorizationURL
     case invalidBoolean(name: String, value: String)
+    case missingRealtimeScopes(requested: [String], granted: [String])
 
     var description: String {
         switch self {
@@ -336,7 +354,19 @@ enum RealtimeSmokeError: Error, Equatable, CustomStringConvertible {
             return "Failed to open the Webex authorization URL"
         case .invalidBoolean(let name, let value):
             return "\(name) must be one of true, false, 1, 0, yes, or no; got \(RealtimeSmokeRedactor.redact(value))"
+        case .missingRealtimeScopes(let requested, let granted):
+            return [
+                "OAuth token is missing realtime scopes.",
+                "Required: spark:all spark:kms.",
+                "Requested: \(scopeDescription(requested)).",
+                "Granted: \(scopeDescription(granted)).",
+                "Update the Webex integration scopes and reauthorize."
+            ].joined(separator: " ")
         }
+    }
+
+    private func scopeDescription(_ scopes: [String]) -> String {
+        scopes.isEmpty ? "(none)" : scopes.sorted().joined(separator: " ")
     }
 }
 

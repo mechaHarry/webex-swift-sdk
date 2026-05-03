@@ -95,6 +95,12 @@ URL requested `spark:kms` as well. `spark:kms` is the encrypted-content scope
 Webex includes for integrations; without it the SDK websocket listener can be
 rejected before the socket opens.
 
+The smoke prints both requested and granted OAuth scopes. If the token response
+grants only a narrower scope such as `spark:people_read`, update the Webex
+integration's allowed scopes, confirm `WEBEX_SCOPES` is not overriding the
+default, and reauthorize with a fresh keychain service or deleted stored
+account.
+
 If OAuth mode still receives WDM HTTP 403 but direct `WEBEX_ACCESS_TOKEN` mode
 registers a device, the Swift request path is working and Webex is rejecting
 the OAuth integration token class for this internal realtime device route.

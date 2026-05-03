@@ -12,6 +12,25 @@ final class RealtimeSmokeOptionsTests: XCTestCase {
         XCTAssertEqual(configuration.scopes, ["spark:all", "spark:kms"])
     }
 
+    func testValidatesGrantedOAuthScopesForRealtime() throws {
+        try WebexRealtimeEventsSmoke.validateGrantedOAuthScopes(
+            requestedScopes: ["spark:kms", "spark:all"],
+            grantedScopes: ["spark:all", "spark:kms"]
+        )
+    }
+
+    func testMissingRealtimeOAuthScopesThrowBeforeDeviceRegistration() {
+        XCTAssertThrowsError(try WebexRealtimeEventsSmoke.validateGrantedOAuthScopes(
+            requestedScopes: ["spark:all", "spark:kms"],
+            grantedScopes: ["spark:people_read"]
+        )) { error in
+            XCTAssertEqual(
+                String(describing: error),
+                "OAuth token is missing realtime scopes. Required: spark:all spark:kms. Requested: spark:all spark:kms. Granted: spark:people_read. Update the Webex integration scopes and reauthorize."
+            )
+        }
+    }
+
     func testDirectAccessTokenIsTrimmedAndOptional() {
         XCTAssertEqual(
             WebexRealtimeEventsSmoke.directAccessToken(from: ["WEBEX_ACCESS_TOKEN": "  token-value  "]),
