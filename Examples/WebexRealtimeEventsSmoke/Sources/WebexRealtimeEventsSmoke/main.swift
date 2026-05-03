@@ -19,30 +19,49 @@ struct WebexRealtimeEventsSmoke {
 
     private static func run() async throws {
         let environment = ProcessInfo.processInfo.environment
-        let configuration = try configurationFromEnvironment(environment)
         let smokeOptions = try RealtimeSmokeOptions(environment: environment)
         let keychainService = environment["WEBEX_KEYCHAIN_SERVICE"] ?? "com.webex.swift-sdk.realtime-events-smoke"
         let httpClient = URLSessionHTTPClient()
         let store = KeychainWebexStore(service: keychainService)
         let registry = WebexClientRegistry(store: store, httpClient: httpClient)
+        let authorized: RealtimeAuthorizedClient
 
-        print("Using Keychain service: \(keychainService)")
-        print("Opening Webex authorization for client id: \(configuration.clientID)")
-        let authorized = try await registry.authorizeAndAddAccount(
-            configuration: configuration,
-            openAuthorizationURL: { authorizationURL in
-                print("")
-                print("Opening Webex authorization in your default browser.")
-                print("If the browser does not open, verify your redirect URI matches the README and rerun after fixing browser defaults.")
-                print("")
-                guard NSWorkspace.shared.open(authorizationURL) else {
-                    throw RealtimeSmokeError.failedToOpenAuthorizationURL
+        if let accessToken = directAccessToken(from: environment) {
+            authorized = directAccessTokenClient(accessToken: accessToken, httpClient: httpClient)
+            print("Using direct WEBEX_ACCESS_TOKEN; OAuth authorization will not be opened.")
+            print("Created temporary local account id: \(authorized.accountID.rawValue)")
+            print("Access token assumed to expire at: \(authorized.accessTokenExpiresAt)")
+        } else {
+            let configuration = try configurationFromEnvironment(environment)
+
+            print("Using Keychain service: \(keychainService)")
+            print("Opening Webex authorization for client id: \(configuration.clientID)")
+            let oauthAuthorized = try await registry.authorizeAndAddAccount(
+                configuration: configuration,
+                openAuthorizationURL: { authorizationURL in
+                    print("")
+                    print("Opening Webex authorization in your default browser.")
+                    print("If the browser does not open, verify your redirect URI matches the README and rerun after fixing browser defaults.")
+                    print("")
+                    guard NSWorkspace.shared.open(authorizationURL) else {
+                        throw RealtimeSmokeError.failedToOpenAuthorizationURL
+                    }
                 }
-            }
-        )
+            )
 
-        print("Created local account id: \(authorized.account.id.rawValue)")
-        print("Saved refresh token record. Access token expires at: \(authorized.accessTokenExpiresAt)")
+            let tokenRecord = try await store.loadTokenRecord(for: oauthAuthorized.account.id)
+            authorized = RealtimeAuthorizedClient(
+                accountID: oauthAuthorized.account.id,
+                client: oauthAuthorized.client,
+                accessTokenExpiresAt: oauthAuthorized.accessTokenExpiresAt
+            )
+
+            print("Created local account id: \(authorized.accountID.rawValue)")
+            print("Saved refresh token record. Access token expires at: \(authorized.accessTokenExpiresAt)")
+            if let tokenRecord {
+                print("Granted scopes: \(tokenRecord.grantedScopes.joined(separator: " "))")
+            }
+        }
         print("")
         print("Starting Webex realtime listener.")
         print("resource filter: \(smokeOptions.resource?.rawValue ?? "(SDK default)")")
@@ -99,6 +118,47 @@ struct WebexRealtimeEventsSmoke {
             redirectURI: redirectURI,
             scopes: scopes,
             prefersEphemeralWebBrowserSession: false
+        )
+    }
+
+    static func directAccessToken(from environment: [String: String]) -> String? {
+        guard let value = environment["WEBEX_ACCESS_TOKEN"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else {
+            return nil
+        }
+
+        return value
+    }
+
+    private static func directAccessTokenClient(
+        accessToken: String,
+        httpClient: HTTPClient
+    ) -> RealtimeAuthorizedClient {
+        let accountID = WebexAccountID()
+        let expiresAt = Date().addingTimeInterval(12 * 60 * 60)
+        let configuration = WebexIntegrationConfiguration(
+            clientID: "direct-access-token",
+            clientSecret: "direct-access-token",
+            redirectURI: WebexOAuthLoopbackRedirectListener.defaultRedirectURI,
+            scopes: [],
+            prefersEphemeralWebBrowserSession: false
+        )
+        let client = WebexClient(
+            accountID: accountID,
+            configuration: configuration,
+            tokenStore: InMemoryWebexStore(),
+            httpClient: httpClient,
+            initialAccessToken: AccessTokenState(
+                value: accessToken,
+                expiresAt: expiresAt,
+                tokenType: "Bearer"
+            )
+        )
+
+        return RealtimeAuthorizedClient(
+            accountID: accountID,
+            client: client,
+            accessTokenExpiresAt: expiresAt
         )
     }
 
@@ -185,6 +245,12 @@ struct WebexRealtimeEventsSmoke {
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
     }
+}
+
+struct RealtimeAuthorizedClient {
+    let accountID: WebexAccountID
+    let client: WebexClient
+    let accessTokenExpiresAt: Date
 }
 
 struct RealtimeSmokeOptions {

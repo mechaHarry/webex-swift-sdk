@@ -12,6 +12,15 @@ final class RealtimeSmokeOptionsTests: XCTestCase {
         XCTAssertEqual(configuration.scopes, ["spark:all", "spark:kms"])
     }
 
+    func testDirectAccessTokenIsTrimmedAndOptional() {
+        XCTAssertEqual(
+            WebexRealtimeEventsSmoke.directAccessToken(from: ["WEBEX_ACCESS_TOKEN": "  token-value  "]),
+            "token-value"
+        )
+        XCTAssertNil(WebexRealtimeEventsSmoke.directAccessToken(from: [:]))
+        XCTAssertNil(WebexRealtimeEventsSmoke.directAccessToken(from: ["WEBEX_ACCESS_TOKEN": "   "]))
+    }
+
     func testDefaultsUseSDKRealtimeSubscriptionsAndDoNotPrintRawUnknownPayloads() throws {
         let options = try RealtimeSmokeOptions(environment: [:])
 

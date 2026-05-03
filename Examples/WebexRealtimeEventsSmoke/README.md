@@ -1,13 +1,13 @@
 # WebexRealtimeEventsSmoke
 
-Interactive OAuth smoke test for Webex realtime websocket events through `WebexSwiftSDK`.
+Interactive smoke test for Webex realtime websocket events through `WebexSwiftSDK`.
 
 This example:
 
-- creates a `WebexIntegrationConfiguration` from environment variables
-- stores a new local account in `WebexClientRegistry`
-- opens the Webex authorization URL in the default browser
-- receives the OAuth redirect through the SDK-owned loopback listener
+- creates a `WebexIntegrationConfiguration` from environment variables, or uses a direct `WEBEX_ACCESS_TOKEN`
+- stores a new local account in `WebexClientRegistry` when running OAuth
+- opens the Webex authorization URL in the default browser when running OAuth
+- receives the OAuth redirect through the SDK-owned loopback listener when running OAuth
 - starts `client.realtime.connect(options:)`
 - prints connection states and realtime events until interrupted
 - redacts token-like and secret-like values before printing unknown payloads
@@ -38,9 +38,22 @@ swift run WebexRealtimeEventsSmoke
 
 The SDK opens a temporary listener on `127.0.0.1:8282`, waits for the browser redirect, connects to Webex realtime, then prints states and events until you press Ctrl-C.
 
+To isolate whether a WDM/Mercury failure is caused by OAuth integration token
+class, run the same Swift realtime path with a developer personal access token
+or bot token:
+
+```bash
+WEBEX_ACCESS_TOKEN="your-token" \
+swift run WebexRealtimeEventsSmoke
+```
+
+When `WEBEX_ACCESS_TOKEN` is set, the smoke does not require
+`WEBEX_CLIENT_ID`, `WEBEX_CLIENT_SECRET`, a redirect URI, browser auth, or a
+Keychain record. The direct token is kept in memory for the process lifetime.
+
 ## Environment
 
-Required:
+Required for OAuth mode:
 
 ```bash
 WEBEX_CLIENT_ID="your-client-id"
@@ -56,6 +69,7 @@ integration scopes.
 Optional:
 
 ```bash
+WEBEX_ACCESS_TOKEN="developer-portal-personal-token-or-bot-token"
 WEBEX_REDIRECT_URI="http://127.0.0.1:8282/callback"
 WEBEX_SCOPES="spark:all spark:kms"
 WEBEX_KEYCHAIN_SERVICE="com.example.webex-realtime-events-smoke.$USER"
@@ -80,6 +94,10 @@ confirm that the integration has `spark:all` enabled and that the authorization
 URL requested `spark:kms` as well. `spark:kms` is the encrypted-content scope
 Webex includes for integrations; without it the SDK websocket listener can be
 rejected before the socket opens.
+
+If OAuth mode still receives WDM HTTP 403 but direct `WEBEX_ACCESS_TOKEN` mode
+registers a device, the Swift request path is working and Webex is rejecting
+the OAuth integration token class for this internal realtime device route.
 
 ## Suggested Checks
 
