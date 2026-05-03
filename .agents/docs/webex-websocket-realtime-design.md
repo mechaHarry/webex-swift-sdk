@@ -199,6 +199,13 @@ This keeps the native Swift implementation closer to the Webex JavaScript SDK
 and Webex bot request shape than a bare REST-style JSON POST, and avoids
 presenting third-party OAuth integrations as first-party desktop devices.
 
+Live WDM create responses may not include `id` or `name`. A successful response
+can include `url`, `webSocketUrl`, and a large `services` object. The device
+adapter must accept that shape by deriving the device ID from the final path
+component of `url` when `id` is absent, and by falling back to the requested SDK
+device name when WDM omits `name`. `webSocketUrl` remains required and must be
+`wss://`.
+
 If WebSocket handshake returns 404, treat device registration as stale: discard device info, re-register, and retry up to a small cap before failing.
 
 ## Backoff And Error Handling
@@ -213,6 +220,9 @@ U2C/WDM HTTP calls:
 - Retry transient network errors, 429, and 5xx with the SDK retry policy.
 - Respect `Retry-After` when present.
 - Redact tokens, socket URLs, and payloads from thrown/logged errors.
+- Decode failures for successful U2C/WDM HTTP responses are deterministic
+  diagnostics, not reconnect candidates. Report operation, HTTP status,
+  missing/mismatched field path, and a compact redacted body preview.
 
 WebSocket lifecycle:
 
@@ -223,6 +233,30 @@ WebSocket lifecycle:
 - Cancellation will close the WebSocket and finish all streams.
 
 Connection states allow macOS apps to show native UI status without parsing error strings.
+
+## OAuth Scope Negotiation
+
+Realtime WebSocket listening needs an OAuth token granted `spark:all` and
+`spark:kms`. It is not enough for the SDK or app to request those scopes in the
+authorization URL; the Webex token response is the authority. If the integration
+is only configured for narrower scopes, Webex can return a token whose granted
+scope is only something like `spark:people_read`, and WDM device registration
+will fail with HTTP 403 even though REST People calls work.
+
+The SDK should preserve granted scopes from token responses and examples/apps
+should validate that the granted token covers the feature being started. For
+macOS apps, scopes should be explicit in `WebexIntegrationConfiguration`,
+selected from feature profiles such as:
+
+- REST People read: `spark:people_read`
+- Messages/Spaces REST screens: the corresponding documented REST read/write
+  scopes
+- Experimental realtime listener: `spark:all spark:kms`
+
+Shell variables such as `WEBEX_SCOPES` are only for examples and smoke tests.
+Production SwiftUI/AppKit clients should set scopes directly in Swift, then
+surface a clear user-facing setup error when the Webex integration grants less
+than the selected feature profile requires.
 
 ## Security
 
@@ -294,6 +328,8 @@ Unit tests will cover:
 - In-memory WDM device reuse.
 - WDM device creation request shape.
 - Stale device 404 handling.
+- Live WDM device response shape where `url` replaces `id` and `name` is
+  omitted.
 - WebSocket authorization frame encoding.
 - Ack frame encoding.
 - Known event decoding.
@@ -304,6 +340,8 @@ Unit tests will cover:
 - Reconnect/backoff behavior with fake sleeper.
 - 401/403 token invalidation and single refresh retry.
 - Redaction of access tokens, auth frames, socket URLs, and unknown payloads.
+- Realtime OAuth examples validate granted scopes before WDM registration and
+  print requested/granted scopes for diagnosis.
 
 Use mock HTTP and mock WebSocket transport protocols. Unit tests must not require live Webex.
 

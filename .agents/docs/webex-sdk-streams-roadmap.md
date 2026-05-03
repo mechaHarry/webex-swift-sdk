@@ -189,6 +189,13 @@ foundation. It is receive-only, sample-backed, and not an official replacement
 for documented REST endpoints. Webhooks remain relevant when an integration
 needs Webex to deliver events to a public `targetUrl`.
 
+Live smoke validation has connected with a direct developer token and with an
+OAuth integration token once Webex granted `spark:all spark:kms`. Do not
+describe realtime failures as stream problems until token grants are checked:
+Webex can return a narrower OAuth token than the app requested, and a token
+granted only REST scopes such as `spark:people_read` can fail WDM registration
+with HTTP 403 before a WebSocket exists.
+
 ## Naming
 
 Use names that communicate state, not REST endpoint behavior:
@@ -239,7 +246,9 @@ emitted to the local app subscriber.
 
 ## Next Steps
 
-1. Validate the live `Examples/WebexRealtimeEventsSmoke` flow with credentials.
+1. Capture live event payloads with `Examples/WebexRealtimeEventsSmoke`,
+   especially unknown payloads after message/space create, update, and delete
+   actions.
 2. Wire `connection.triggers` into Snapshot Streams in app examples.
 3. Keep polling deprecated or temporary while realtime validation continues.
 4. Continue broader REST group coverage after the stream trigger path is proven.

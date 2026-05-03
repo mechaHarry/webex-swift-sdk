@@ -204,10 +204,57 @@ calls but can fail WDM device registration with HTTP 403 before a socket opens.
 After changing an integration's scopes, reauthorize so the access token actually
 contains the new grants.
 
+Live smoke validation proved that the SDK can connect end-to-end with both a
+developer access token and an OAuth integration token when the OAuth token is
+granted `spark:all spark:kms`. The important pitfall is scope negotiation:
+requesting scopes in the authorization URL is not enough. Webex may return a
+token with only the scopes allowed on the integration, for example
+`spark:people_read`. Future SDK and app flows must compare requested scopes to
+the token response's granted scopes and fail before WDM registration if the
+granted token is missing realtime scopes.
+
+For macOS apps, do not rely on shell environment variables for scopes. The app
+should choose an explicit feature profile and pass those scopes into
+`WebexIntegrationConfiguration`:
+
+```swift
+let configuration = WebexIntegrationConfiguration(
+    clientID: userProvidedClientID,
+    clientSecret: userProvidedClientSecret,
+    redirectURI: URL(string: "http://127.0.0.1:8282/oauth/callback")!,
+    scopes: ["spark:all", "spark:kms"],
+    prefersEphemeralWebBrowserSession: false
+)
+```
+
+Environment variables such as `WEBEX_SCOPES` are smoke-test conveniences only.
+If direct `WEBEX_ACCESS_TOKEN` mode connects but OAuth mode fails WDM device
+registration with 403, first inspect the granted OAuth scopes, then the Webex
+integration's allowed scopes. Use a fresh keychain service or delete the stored
+account when reauthorizing after scope changes.
+
 U2C discovery follows the Webex JavaScript SDK shape: fetch the limited/preauth
 catalog without authorization, use its `u2c` service link for the postauth
 catalog when possible, and fall back to the limited catalog's `wdm` service link
 if postauth U2C returns 401/403 for an integration token.
+
+WDM device create can return a successful response shaped like:
+
+```json
+{
+  "url": "https://wdm-a.wbx2.com/wdm/api/v1/devices/<device-id>",
+  "webSocketUrl": "wss://...",
+  "services": {
+    "conversationServiceUrl": "https://..."
+  }
+}
+```
+
+Do not require a top-level `id` or `name` from WDM. The SDK should derive the
+device ID from the final path component of `url` when `id` is absent and should
+fall back to the requested SDK device name when `name` is absent. Diagnostic
+errors may include compact redacted response previews, but must redact
+`webSocketUrl`, tokens, and secret-like fields.
 
 The implementation is sample-backed and experimental. It uses U2C/WDM device
 discovery, `URLSessionWebSocketTask`, authorization frames, ack frames,
@@ -287,5 +334,9 @@ Cancel the realtime `connection` when the app no longer needs event delivery.
   auth retry behavior.
 - Verify realtime event decoding maps modeled resources into stream triggers.
 - Verify unknown realtime payload printing is opt-in and redacted by default.
+- Verify OAuth realtime smoke validates granted scopes before WDM device
+  registration.
+- Verify WDM device decoding accepts the live `url`-backed response shape and
+  still rejects malformed responses without leaking tokens or socket URLs.
 - Verify `Examples/WebexRealtimeEventsSmoke` builds and can be used for live
   smoke validation when credentials are available.

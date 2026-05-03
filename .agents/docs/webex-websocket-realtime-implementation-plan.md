@@ -10,6 +10,30 @@
 
 ---
 
+## Post-Implementation Lessons
+
+This plan predates several live-smoke discoveries. Future agents should treat
+these as source-of-truth corrections when extending realtime work:
+
+- Realtime OAuth tokens must be granted `spark:all spark:kms`; REST read scopes
+  such as `spark:people_read` can authorize REST calls but fail WDM device
+  creation with HTTP 403.
+- Requested scopes and granted scopes are different. The authorization URL can
+  ask for realtime scopes while Webex grants only scopes enabled on the
+  integration. Validate granted scopes before WDM registration.
+- `WEBEX_SCOPES` is only a smoke-test input. Real macOS apps should set scopes
+  directly in `WebexIntegrationConfiguration` from a typed feature profile.
+- Direct `WEBEX_ACCESS_TOKEN` smoke mode is useful to isolate Swift protocol
+  issues from OAuth integration scope/class issues.
+- WDM device create can succeed with HTTP 200 and return `url` plus
+  `webSocketUrl`, not `id`/`name`. Derive the device ID from `url` and fall
+  back to the requested device name.
+- Successful-response decode failures should include operation, HTTP status,
+  field path, and a redacted body preview, and should not be retried as normal
+  reconnect candidates.
+
+---
+
 ## File Structure
 
 Create:
@@ -1574,7 +1598,9 @@ In the same file define:
   - Filters events by raw resource/event strings.
 - `configurationFromEnvironment(_:)`
   - Same pattern as existing smoke examples.
-  - Default scopes include `spark:messages_read spark:rooms_read spark:memberships_read spark:people_read`.
+  - Default scopes include `spark:all spark:kms`.
+  - After OAuth token exchange, print requested and granted scopes and fail
+    before WDM registration if the granted token lacks realtime scopes.
 - `printEvent(_:printRawUnknown:)`
   - Prints timestamp, `resource:event`, decode status, IDs.
   - Prints `UNKNOWN EVENT` for `.unknownEvent`.

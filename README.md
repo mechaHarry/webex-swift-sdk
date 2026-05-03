@@ -16,6 +16,7 @@ This package provides the OAuth and authenticated REST foundation:
 - authenticated REST transport
 - typed People, Spaces, Memberships, and Messages APIs
 - snapshot streams for Spaces, Memberships, and Messages
+- experimental receive-only realtime WebSocket events and stream triggers
 
 ## Example
 
@@ -66,6 +67,50 @@ if snapshot.pagination.hasMore, !snapshot.pagination.capReached {
 The `max` parameter remains the Webex REST page size. The stream `pageLimit`
 is only a local safety cap for how many pages explicit `loadNextPage()` calls
 may accumulate before the stream reports `pagination.capReached`.
+
+## Realtime
+
+Realtime support is an experimental Swift-native WebSocket listener exposed
+through `client.realtime`. It is receive-only: use REST APIs for writes and
+detail fetches, and use realtime events as triggers for refreshing SDK Snapshot
+Streams or app state.
+
+```swift
+let connection = client.realtime.connect()
+
+Task {
+    for await state in connection.states {
+        print(state)
+    }
+}
+
+Task {
+    for await event in connection.events {
+        print(event.resource, event.event, event.decodeStatus)
+    }
+}
+```
+
+For realtime OAuth, the Webex token must be granted `spark:all` and
+`spark:kms`. A host macOS app should set those scopes directly in
+`WebexIntegrationConfiguration`; shell variables such as `WEBEX_SCOPES` are
+only for examples.
+
+```swift
+let configuration = WebexIntegrationConfiguration(
+    clientID: userProvidedClientID,
+    clientSecret: userProvidedClientSecret,
+    redirectURI: URL(string: "http://127.0.0.1:8282/oauth/callback")!,
+    scopes: ["spark:all", "spark:kms"],
+    prefersEphemeralWebBrowserSession: false
+)
+```
+
+The token response's granted scopes are authoritative. If Webex grants only a
+narrow REST scope such as `spark:people_read`, REST People calls can still work
+while realtime WDM device registration fails with HTTP 403. After changing
+integration scopes in Webex, reauthorize so the new grants are present in the
+stored token record.
 
 ## Spaces
 
@@ -166,3 +211,4 @@ try await client.messages.delete(messageID: edited.id)
 - `Examples/WebexMembershipsListSmoke`: interactive OAuth smoke test that lists Memberships for `WEBEX_ROOM_ID` with explicit bounded pagination.
 - `Examples/WebexMessagesListSmoke`: interactive OAuth smoke test that lists Messages for `WEBEX_ROOM_ID` with explicit bounded pagination.
 - `Examples/WebexMessagesStreamWindowSmoke`: native SwiftUI smoke window that subscribes to `MessagesStream` snapshots and refreshes messages through the stream.
+- `Examples/WebexRealtimeEventsSmoke`: interactive OAuth or direct-token smoke test that connects to Webex realtime, validates granted realtime scopes in OAuth mode, and prints connection states/events.
