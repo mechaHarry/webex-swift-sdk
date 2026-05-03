@@ -100,6 +100,30 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
         ])
     }
 
+    func testRegistersDeviceFromURLBackedWDMResponse() async throws {
+        let httpClient = MockMercuryDeviceHTTPClient()
+        await enqueueLimitedCatalog(on: httpClient)
+        await httpClient.enqueue(response: httpResponse(
+            url: URL(string: "https://u2c-r.wbx2.com/u2c/api/v1/catalog?format=hostmap")!,
+            statusCode: 200,
+            body: #"{"serviceLinks":{"wdm":"https://wdm.example.com/wdm/api/v1"}}"#
+        ))
+        await httpClient.enqueue(response: httpResponse(
+            url: URL(string: "https://wdm.example.com/wdm/api/v1/devices")!,
+            statusCode: 200,
+            body: #"{"url":"https://wdm.example.com/wdm/api/v1/devices/device-from-url","webSocketUrl":"wss://created.example.com","services":{"conversationServiceUrl":"https://conv.example.com/conversation/api/v1"}}"#
+        ))
+        let service = makeService(httpClient: httpClient)
+
+        let device = try await service.device(options: WebexRealtimeOptions(deviceName: "desk"))
+
+        XCTAssertEqual(device, WebexMercuryDevice(
+            id: "device-from-url",
+            name: "desk",
+            webSocketURL: URL(string: "wss://created.example.com")!
+        ))
+    }
+
     func testFallsBackToLimitedCatalogWDMWhenPostauthU2CIsForbidden() async throws {
         let httpClient = MockMercuryDeviceHTTPClient()
         await httpClient.enqueue(response: httpResponse(
@@ -314,7 +338,7 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
         await httpClient.enqueue(response: httpResponse(
             url: URL(string: "https://wdm.example.com/wdm/api/v1/devices")!,
             statusCode: 201,
-            body: #"{"name":"desk","webSocketUrl":"wss://created.example.com?access_token=socket-secret","access_token":"body-secret","normal":"visible"}"#
+            body: #"{"url":"https://wdm.example.com/wdm/api/v1/devices/device-1","access_token":"body-secret","normal":"visible"}"#
         ))
         let service = makeService(httpClient: httpClient, retryPolicy: RetryPolicy(maxAttempts: 1, baseDelay: 0, jitter: 0, maximumDelay: 10))
 
@@ -329,12 +353,9 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
 
             XCTAssertTrue(message.contains("Webex realtime WDM device create response decoding failed"), message)
             XCTAssertTrue(message.contains("HTTP 201"), message)
-            XCTAssertTrue(message.contains("missing field id"), message)
+            XCTAssertTrue(message.contains("missing field webSocketUrl"), message)
             XCTAssertTrue(message.contains("body="), message)
             XCTAssertTrue(message.contains(#""normal":"visible""#), message)
-            XCTAssertTrue(message.contains("wss://[redacted]"), message)
-            XCTAssertFalse(message.contains("wss://created.example.com"), message)
-            XCTAssertFalse(message.contains("socket-secret"), message)
             XCTAssertFalse(message.contains("body-secret"), message)
             XCTAssertFalse(message.contains("realtime-token"), message)
         }

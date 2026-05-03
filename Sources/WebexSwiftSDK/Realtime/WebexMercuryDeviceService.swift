@@ -67,7 +67,7 @@ internal struct WebexMercuryDeviceService: Sendable {
             request: makeRequest(url: devicesURL, method: "POST", body: JSONEncoder().encode(body)),
             operation: "WDM device create"
         )
-        .webexMercuryDevice()
+        .webexMercuryDevice(deviceName: options.deviceName)
 
         await cache.save(selectedDevice)
         return selectedDevice
@@ -450,18 +450,45 @@ private struct U2CCatalogResponse: Decodable {
 }
 
 private struct DeviceResponse: Decodable {
-    let id: String
-    let name: String
+    let id: String?
+    let url: String?
+    let name: String?
     let webSocketUrl: String
 
-    func webexMercuryDevice() throws -> WebexMercuryDevice {
+    func webexMercuryDevice(deviceName: String) throws -> WebexMercuryDevice {
+        guard let id = resolvedID else {
+            throw WebexSDKError.network("Invalid Webex realtime WDM device response: missing device id")
+        }
+
         guard let url = URL(string: webSocketUrl),
               url.scheme?.lowercased() == "wss",
               url.host != nil else {
             throw WebexSDKError.network("Invalid Webex realtime WebSocket URL")
         }
 
-        return WebexMercuryDevice(id: id, name: name, webSocketURL: url)
+        return WebexMercuryDevice(id: id, name: resolvedName(fallback: deviceName), webSocketURL: url)
+    }
+
+    private var resolvedID: String? {
+        if let id, !id.isEmpty {
+            return id
+        }
+
+        guard let url,
+              let deviceURL = URL(string: url) else {
+            return nil
+        }
+
+        let id = deviceURL.lastPathComponent
+        return id.isEmpty ? nil : id
+    }
+
+    private func resolvedName(fallback: String) -> String {
+        guard let name, !name.isEmpty else {
+            return fallback
+        }
+
+        return name
     }
 }
 
