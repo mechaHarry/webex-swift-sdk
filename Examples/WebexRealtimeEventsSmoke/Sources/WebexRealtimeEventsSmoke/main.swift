@@ -76,7 +76,11 @@ struct WebexRealtimeEventsSmoke {
         print("")
         print("Press Ctrl-C to stop.")
 
-        let connection = authorized.client.realtime.connect(options: smokeOptions.realtimeOptions)
+        let connection = authorized.client.realtime.connect(options: smokeOptions.makeRealtimeOptions(
+            diagnosticHandler: { diagnostic in
+                print(format(diagnostic: diagnostic))
+            }
+        ))
         defer {
             connection.cancel()
         }
@@ -194,7 +198,8 @@ struct WebexRealtimeEventsSmoke {
             "status=\(description(for: event.decodeStatus))",
             "resourceID=\(event.resourceID ?? "(nil)")",
             "roomID=\(event.roomID ?? "(nil)")",
-            "actorID=\(event.actorID ?? "(nil)")"
+            "actorID=\(event.actorID ?? "(nil)")",
+            "ackID=\(event.ackID ?? "(nil)")"
         ]
 
         if event.decodeStatus != .known {
@@ -206,6 +211,67 @@ struct WebexRealtimeEventsSmoke {
         }
 
         return fields.joined(separator: " ")
+    }
+
+    static func format(diagnostic: WebexRealtimeDiagnosticEvent) -> String {
+        var fields = [
+            iso8601(Date()),
+            "diagnostic=\(description(for: diagnostic))"
+        ]
+
+        switch diagnostic {
+        case .eventDecoded(let metadata),
+             .eventFilteredOut(let metadata),
+             .ackSucceeded(let metadata):
+            fields.append(contentsOf: metadataFields(metadata))
+        case .ackFailed(let metadata, let error):
+            fields.append(contentsOf: metadataFields(metadata))
+            fields.append("reason=\(RealtimeSmokeRedactor.redact(String(describing: error)))")
+        case .frameDecodeFailed(let error):
+            fields.append("reason=\(RealtimeSmokeRedactor.redact(String(describing: error)))")
+        case .reconnectScheduled(let attempt, let delay, let reason):
+            fields.append("attempt=\(attempt)")
+            fields.append("delay=\(delay)")
+            fields.append("reason=\(RealtimeSmokeRedactor.redact(String(describing: reason)))")
+        }
+
+        return fields.joined(separator: " ")
+    }
+
+    private static func metadataFields(_ metadata: WebexRealtimeEventMetadata) -> [String] {
+        [
+            "known=\(metadata.isKnown)",
+            "resource=\(metadata.resource)",
+            "event=\(metadata.event)",
+            "knownResource=\(metadata.knownResource.rawValue)",
+            "knownEvent=\(metadata.knownEvent.rawValue)",
+            "status=\(description(for: metadata.decodeStatus))",
+            "id=\(metadata.id ?? "(nil)")",
+            "resourceID=\(metadata.resourceID ?? "(nil)")",
+            "roomID=\(metadata.roomID ?? "(nil)")",
+            "actorID=\(metadata.actorID ?? "(nil)")",
+            "ackID=\(metadata.ackID ?? "(nil)")",
+            "sourceEventType=\(metadata.sourceEventType ?? "(nil)")",
+            "activityVerb=\(metadata.activityVerb ?? "(nil)")",
+            "objectType=\(metadata.objectType ?? "(nil)")"
+        ]
+    }
+
+    private static func description(for diagnostic: WebexRealtimeDiagnosticEvent) -> String {
+        switch diagnostic {
+        case .eventDecoded:
+            return "eventDecoded"
+        case .eventFilteredOut:
+            return "eventFilteredOut"
+        case .ackSucceeded:
+            return "ackSucceeded"
+        case .ackFailed:
+            return "ackFailed"
+        case .frameDecodeFailed:
+            return "frameDecodeFailed"
+        case .reconnectScheduled:
+            return "reconnectScheduled"
+        }
     }
 
     private static func description(for status: WebexRealtimeDecodeStatus) -> String {
@@ -305,6 +371,20 @@ struct RealtimeSmokeOptions {
             includeMembershipSeen: includeSeen,
             retryPolicy: defaults.retryPolicy,
             deviceName: defaults.deviceName
+        )
+    }
+
+    func makeRealtimeOptions(
+        diagnosticHandler: (@Sendable (WebexRealtimeDiagnosticEvent) -> Void)?
+    ) -> WebexRealtimeOptions {
+        let defaults = WebexRealtimeOptions()
+        return WebexRealtimeOptions(
+            resources: resource.map { [$0] } ?? defaults.resources,
+            events: event.map { [$0] } ?? defaults.events,
+            includeMembershipSeen: includeSeen,
+            retryPolicy: defaults.retryPolicy,
+            deviceName: defaults.deviceName,
+            diagnosticHandler: diagnosticHandler
         )
     }
 

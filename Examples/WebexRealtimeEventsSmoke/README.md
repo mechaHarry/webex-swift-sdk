@@ -9,7 +9,7 @@ This example:
 - opens the Webex authorization URL in the default browser when running OAuth
 - receives the OAuth redirect through the SDK-owned loopback listener when running OAuth
 - starts `client.realtime.connect(options:)`
-- prints connection states and realtime events until interrupted
+- prints connection states, realtime events, and SDK realtime diagnostics until interrupted
 - redacts token-like and secret-like values before printing unknown payloads
 
 ## Run
@@ -36,7 +36,7 @@ WEBEX_CLIENT_SECRET="your-client-secret" \
 swift run WebexRealtimeEventsSmoke
 ```
 
-The SDK opens a temporary listener on `127.0.0.1:8282`, waits for the browser redirect, connects to Webex realtime, then prints states and events until you press Ctrl-C.
+The SDK opens a temporary listener on `127.0.0.1:8282`, waits for the browser redirect, connects to Webex realtime, then prints states, events, and diagnostics until you press Ctrl-C.
 
 To isolate whether a WDM/Mercury failure is caused by OAuth integration token
 class, run the same Swift realtime path with a developer personal access token
@@ -100,6 +100,19 @@ grants only a narrower scope such as `spark:people_read`, update the Webex
 integration's allowed scopes, confirm `WEBEX_SCOPES` is not overriding the
 default, and reauthorize with a fresh keychain service or deleted stored
 account.
+
+Realtime diagnostic lines begin with `diagnostic=`. They include decoded event
+metadata, whether the SDK recognized the event (`known=true`), filtered-event
+decisions, ACK success/failure, frame decode failures, and the exact reason a
+reconnect was scheduled. They also include Mercury source metadata such as
+`sourceEventType`, `activityVerb`, and `objectType` when available, which helps
+distinguish message create/update/delete representations without dumping raw
+payloads. These diagnostics intentionally avoid raw payload printing unless
+`WEBEX_REALTIME_PRINT_RAW_UNKNOWN=true` is set for unknown decode shapes.
+
+The SDK prepares Webex's WDM `webSocketUrl` with text wire-format query
+parameters before connecting. A reconnect reason of `unsupported binary frame`
+usually means that text wire-format negotiation is missing or not being honored.
 
 If OAuth mode still receives WDM HTTP 403 but direct `WEBEX_ACCESS_TOKEN` mode
 registers a device, the Swift request path is working and Webex is rejecting

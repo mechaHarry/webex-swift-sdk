@@ -261,9 +261,46 @@ discovery, `URLSessionWebSocketTask`, authorization frames, ack frames,
 reconnect/backoff, stale-device retry, auth retry, unknown event preservation,
 unknown payload preservation, and trigger mapping.
 
+Mercury ACK identity is transport-level state. ACK frames must use the incoming
+Mercury envelope/frame `id`, falling back to the activity id only when the
+envelope id is absent. Do not ACK `activity.object.id` or another REST resource
+id. The SDK should expose `resourceID` as the app-facing Webex message/space/etc.
+identifier, but `ackID` is only the socket acknowledgment target. Live smoke
+testing showed that conflating these can make Webex close the WebSocket after a
+message event, which looks like an event-driven reconnect/backoff loop.
+
+ACK is independent of app delivery. If the SDK decodes a Mercury event with an
+`ackID`, it should ACK that frame even when `WebexRealtimeOptions` filters the
+event out of `connection.events`. Filtering is an SDK/app subscription decision;
+ACK is WebSocket protocol bookkeeping.
+
+`WebexRealtimeOptions.diagnosticHandler` is the structured debug hook for this
+experimental layer. It reports decoded event metadata, filtered-event
+decisions, ACK success/failure, frame decode failure, and reconnect scheduling
+reason without exposing raw payloads. The metadata should include Mercury source
+fields such as `sourceEventType`, `activityVerb`, and `objectType` when present.
+Use `WebexRealtimeEventsSmoke` first when live behavior is unclear; it enables
+this hook and prints redacted diagnostics.
+
+Known Mercury control frames such as `mercury.buffer_state` and
+`mercury.registration_status` are internal protocol frames. Decode them as
+known `resource=mercury` events so diagnostics are meaningful, but let the
+default realtime resource filters suppress app-facing delivery.
+
+Prepare the WDM `webSocketUrl` before opening the socket. Working Mercury
+clients request text frames with `outboundWireFormat=text`, include
+`bufferStates=true`, include `aliasHttpStatus=true`, and send a
+`clientTimestamp` query value. If the SDK connects to the raw WDM URL, Webex can
+send binary frames that the Swift JSON decoder cannot inspect, which presents as
+`Webex realtime WebSocket received unsupported binary frame` followed by
+reconnect/backoff.
+
 Currently modeled realtime resources/events:
 
 - `messages`
+  - `created`
+  - `updated`
+  - `deleted`
 - `rooms` / spaces
 - `memberships`
 - `attachmentActions`

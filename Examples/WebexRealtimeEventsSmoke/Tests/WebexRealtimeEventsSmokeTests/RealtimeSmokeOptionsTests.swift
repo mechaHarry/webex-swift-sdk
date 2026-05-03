@@ -133,4 +133,50 @@ final class RealtimeSmokeOptionsTests: XCTestCase {
         XCTAssertTrue(redacted.contains(#""secret":"[REDACTED]""#))
         XCTAssertTrue(redacted.contains(#""normal":"value""#))
     }
+
+    func testFormatsRealtimeDiagnosticReconnectReason() {
+        let diagnostic = WebexRealtimeDiagnosticEvent.reconnectScheduled(
+            attempt: 2,
+            delay: 4,
+            reason: .network("socket closed")
+        )
+
+        let line = WebexRealtimeEventsSmoke.format(diagnostic: diagnostic)
+
+        XCTAssertTrue(line.contains("diagnostic=reconnectScheduled"))
+        XCTAssertTrue(line.contains("attempt=2"))
+        XCTAssertTrue(line.contains("delay=4.0"))
+        XCTAssertTrue(line.contains("reason=Network error: socket closed"))
+    }
+
+    func testFormatsRealtimeDiagnosticMetadataWithoutPayload() {
+        let metadata = WebexRealtimeEventMetadata(
+            id: "mercury-frame-id",
+            resource: "messages",
+            event: "created",
+            knownResource: .messages,
+            knownEvent: .created,
+            decodeStatus: .known,
+            resourceID: "message-id",
+            roomID: "room-id",
+            actorID: "person-id",
+            ackID: "mercury-frame-id",
+            sourceEventType: "conversation.activity",
+            activityVerb: "post",
+            objectType: "comment"
+        )
+
+        let line = WebexRealtimeEventsSmoke.format(diagnostic: .eventDecoded(metadata))
+
+        XCTAssertTrue(line.contains("diagnostic=eventDecoded"))
+        XCTAssertTrue(line.contains("known=true"))
+        XCTAssertTrue(line.contains("resource=messages"))
+        XCTAssertTrue(line.contains("event=created"))
+        XCTAssertTrue(line.contains("resourceID=message-id"))
+        XCTAssertTrue(line.contains("ackID=mercury-frame-id"))
+        XCTAssertTrue(line.contains("sourceEventType=conversation.activity"))
+        XCTAssertTrue(line.contains("activityVerb=post"))
+        XCTAssertTrue(line.contains("objectType=comment"))
+        XCTAssertFalse(line.contains("payload="))
+    }
 }

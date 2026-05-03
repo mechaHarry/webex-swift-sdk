@@ -203,6 +203,7 @@ internal final class WebexRealtimeLiveConnectionSource: WebexRealtimeConnectionS
                 }
 
                 let delay = retryDelay(for: error, attempt: retryAttempt)
+                report(.reconnectScheduled(attempt: retryAttempt, delay: delay, reason: error))
                 streamState.yield(.reconnecting(attempt: retryAttempt, delay: delay))
                 do {
                     try await sleeper(delay)
@@ -226,6 +227,7 @@ internal final class WebexRealtimeLiveConnectionSource: WebexRealtimeConnectionS
                 }
 
                 let delay = retryDelay(for: sdkError, attempt: retryAttempt)
+                report(.reconnectScheduled(attempt: retryAttempt, delay: delay, reason: sdkError))
                 streamState.yield(.reconnecting(attempt: retryAttempt, delay: delay))
                 do {
                     try await sleeper(delay)
@@ -267,14 +269,28 @@ internal final class WebexRealtimeLiveConnectionSource: WebexRealtimeConnectionS
             let decoder = WebexRealtimeEventDecoder()
             for try await frame in frames {
                 try Task.checkCancellation()
-                let event = try decoder.decode(Data(frame.utf8))
-                guard Self.shouldYield(event, options: options) else {
-                    continue
+                let event = try decodeFrame(frame, decoder: decoder)
+                let metadata = WebexRealtimeEventMetadata(event: event)
+                report(.eventDecoded(metadata))
+
+                if Self.shouldYield(event, options: options) {
+                    streamState.yield(event)
+                } else {
+                    report(.eventFilteredOut(metadata))
                 }
 
-                streamState.yield(event)
                 if let ackID = event.ackID {
-                    try await session.ack(messageID: ackID)
+                    do {
+                        try await session.ack(messageID: ackID)
+                        report(.ackSucceeded(metadata))
+                    } catch let error as WebexSDKError {
+                        report(.ackFailed(metadata, error: error))
+                        throw error
+                    } catch {
+                        let sdkError = WebexSDKError.network("Webex realtime ACK failed: \(Redactor.redactSecrets(error.localizedDescription))")
+                        report(.ackFailed(metadata, error: sdkError))
+                        throw sdkError
+                    }
                 }
             }
         } catch is CancellationError {
@@ -284,6 +300,23 @@ internal final class WebexRealtimeLiveConnectionSource: WebexRealtimeConnectionS
         } catch {
             throw WebexSDKError.network("Webex realtime connection failed: \(Redactor.redactSecrets(error.localizedDescription))")
         }
+    }
+
+    private func decodeFrame(_ frame: String, decoder: WebexRealtimeEventDecoder) throws -> WebexRealtimeEvent {
+        do {
+            return try decoder.decode(Data(frame.utf8))
+        } catch let error as WebexSDKError {
+            report(.frameDecodeFailed(error: error))
+            throw error
+        } catch {
+            let sdkError = WebexSDKError.network("Webex realtime frame decode failed: \(Redactor.redactSecrets(error.localizedDescription))")
+            report(.frameDecodeFailed(error: sdkError))
+            throw sdkError
+        }
+    }
+
+    private func report(_ event: WebexRealtimeDiagnosticEvent) {
+        options.diagnosticHandler?(event)
     }
 
     private func shouldRetryConnection(error: WebexSDKError, attempt: Int) -> Bool {

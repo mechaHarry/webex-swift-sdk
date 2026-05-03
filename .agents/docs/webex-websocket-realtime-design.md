@@ -71,8 +71,10 @@ Startup flow:
 6. Device service reuses its in-memory cached device if it matches the requested device name.
 7. If no usable cached device exists, device service creates one with a desktop/native SDK identity.
 8. Device service returns the WDM-provided `webSocketUrl`.
-9. WebSocket session connects to the `wss://` URL with `URLSessionWebSocketTask`.
-10. After connection, session sends an authorization frame:
+9. WebSocket transport prepares the `wss://` URL with `outboundWireFormat=text`,
+   `bufferStates=true`, `aliasHttpStatus=true`, and a `clientTimestamp`.
+10. WebSocket session connects to the prepared URL with `URLSessionWebSocketTask`.
+11. After connection, session sends an authorization frame:
 
    ```json
    {
@@ -84,12 +86,13 @@ Startup flow:
    }
    ```
 
-9. Incoming text frames decode into a raw Mercury envelope first.
-10. Known event shapes normalize into `WebexRealtimeEvent`.
-11. Unknown resource/event/payload shapes are preserved and emitted instead of dropped.
-12. `WebexRealtimeConnection.events` emits rich event values.
-13. `WebexRealtimeConnection.triggers` maps those events into `WebexStreamTrigger` values.
-14. Snapshot Streams may call `refreshOnTriggers(connection.triggers, where:)` to refresh only for matching realtime signals.
+12. Incoming text frames decode into a raw Mercury envelope first.
+13. Known event shapes normalize into `WebexRealtimeEvent`.
+14. ACK frames use the Mercury envelope/frame `id`, not the REST resource id inside the event payload.
+15. Unknown resource/event/payload shapes are preserved and emitted instead of dropped.
+16. `WebexRealtimeConnection.events` emits rich event values.
+17. `WebexRealtimeConnection.triggers` maps those events into `WebexStreamTrigger` values.
+18. Snapshot Streams may call `refreshOnTriggers(connection.triggers, where:)` to refresh only for matching realtime signals.
 
 ## Public API Shape
 
@@ -226,11 +229,18 @@ U2C/WDM HTTP calls:
 
 WebSocket lifecycle:
 
+- The raw WDM `webSocketUrl` must be prepared with text wire-format query
+  parameters before opening `URLSessionWebSocketTask`; otherwise Webex can send
+  binary frames that are not decodable by the JSON event layer.
 - Reconnect after abnormal disconnects with exponential backoff.
 - Default max backoff will be capped, with 240 seconds as a reasonable upper bound based on the Python example.
 - 401/403 will invalidate the access token, refresh once, and reconnect.
 - If token refresh fails, emit failed or reauthentication-required state.
 - Cancellation will close the WebSocket and finish all streams.
+- `WebexRealtimeOptions.diagnosticHandler` should report decoded event metadata,
+  filtered-event decisions, ACK success/failure, frame decode failure, and the
+  exact reason a reconnect is scheduled. Include Mercury metadata fields such as
+  `sourceEventType`, `activityVerb`, and `objectType` when available.
 
 Connection states allow macOS apps to show native UI status without parsing error strings.
 
@@ -268,6 +278,28 @@ Security requirements:
 - Use existing redaction utilities for public error descriptions.
 - Avoid strong reference cycles between connection, task, session, and stream continuations.
 - Make cancellation deterministic so long-running WebSocket tasks do not leak after windows close or accounts are removed.
+
+## Mercury ACK Semantics
+
+Mercury ACKs are transport acknowledgments. They must target the WebSocket
+envelope/frame `id`. Keep that separate from app-facing resource identity:
+`resourceID` should be the message/room/membership/etc. id that REST APIs know
+about, while `ackID` should be the Mercury frame id used only for the ACK frame.
+If the SDK ACKs `activity.object.id` for a message event, Webex can close the
+socket after delivering the event, producing a misleading reconnect/backoff loop
+whenever new messages arrive.
+
+ACKs must still be sent when app-facing filters suppress event delivery. A
+filtered decoded event is still a received Mercury frame from the transport's
+point of view.
+
+## Internal Mercury Frames
+
+Mercury control frames like `mercury.buffer_state` and
+`mercury.registration_status` should not appear as anonymous unknown events.
+Decode them as known internal `resource=mercury` events, preserve their payload
+for opt-in diagnostics, and rely on default resource filters to keep them out of
+normal app-facing event streams.
 
 ## Snapshot Streams Integration
 

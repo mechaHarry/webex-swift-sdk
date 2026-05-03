@@ -112,6 +112,18 @@ while realtime WDM device registration fails with HTTP 403. After changing
 integration scopes in Webex, reauthorize so the new grants are present in the
 stored token record.
 
+Realtime event ACKs use the Mercury frame id, while event `resourceID` remains
+the REST resource id that apps use for follow-up API calls. The
+`WebexRealtimeEventsSmoke` output includes both fields for protocol debugging.
+The smoke also enables `WebexRealtimeOptions.diagnosticHandler`, so it prints
+decoded event metadata, filtered-event decisions, ACK failures, frame decode
+failures, and reconnect reasons without dumping raw payloads by default. These
+diagnostics include Mercury source metadata such as `sourceEventType`,
+`activityVerb`, and `objectType` when available.
+The WebSocket transport prepares the WDM URL with text wire-format query
+parameters before connecting; using the raw WDM URL can make Webex send binary
+frames that the JSON event layer cannot decode.
+
 ## Spaces
 
 Webex's REST API still uses `/v1/rooms`, while modern product language calls

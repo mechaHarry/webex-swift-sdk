@@ -29,7 +29,7 @@ final class WebexRealtimeEventDecoderTests: XCTestCase {
         XCTAssertEqual(event.payload["text"], .string("hello"))
     }
 
-    func testPreservesUnknownEvent() throws {
+    func testDecodesJSSDKLikeMessageUpdatedEvent() throws {
         let event = try WebexRealtimeEventDecoder().decode(jsonData("""
         {
           "id": "event-2",
@@ -45,7 +45,7 @@ final class WebexRealtimeEventDecoderTests: XCTestCase {
 
         XCTAssertEqual(event.knownResource, .messages)
         XCTAssertEqual(event.knownEvent, .updated)
-        XCTAssertEqual(event.decodeStatus, .unknownEvent)
+        XCTAssertEqual(event.decodeStatus, .known)
         XCTAssertEqual(event.resourceID, "message-2")
         XCTAssertEqual(event.roomID, "room-2")
         XCTAssertEqual(event.actorID, "person-2")
@@ -181,6 +181,7 @@ final class WebexRealtimeEventDecoderTests: XCTestCase {
               "id": "activity-1",
               "verb": "post",
               "object": {
+                "objectType": "comment",
                 "id": "message-4"
               },
               "target": {
@@ -203,23 +204,30 @@ final class WebexRealtimeEventDecoderTests: XCTestCase {
         XCTAssertEqual(event.resourceID, "message-4")
         XCTAssertEqual(event.roomID, "room-4")
         XCTAssertEqual(event.actorID, "person-4")
-        XCTAssertEqual(event.ackID, "message-4")
+        XCTAssertEqual(event.ackID, "mercury-1")
+        XCTAssertEqual(event.sourceEventType, "conversation.activity")
+        XCTAssertEqual(event.activityVerb, "post")
+        XCTAssertEqual(event.objectType, "comment")
     }
 
-    func testMapsMercuryConversationActivityUpdateToMessageUpdatedUnknownEvent() throws {
+    func testMapsMercuryConversationActivityUpdateToMessageUpdated() throws {
         let event = try decodeMercuryConversationActivity(
             verb: "update",
             activityID: "activity-update",
-            objectID: "message-update"
+            objectID: "message-update",
+            objectType: "comment"
         )
 
         XCTAssertEqual(event.resource, "messages")
         XCTAssertEqual(event.event, "updated")
         XCTAssertEqual(event.knownResource, .messages)
         XCTAssertEqual(event.knownEvent, .updated)
-        XCTAssertEqual(event.decodeStatus, .unknownEvent)
+        XCTAssertEqual(event.decodeStatus, .known)
         XCTAssertEqual(event.resourceID, "message-update")
-        XCTAssertEqual(event.ackID, "message-update")
+        XCTAssertEqual(event.ackID, "mercury-update")
+        XCTAssertEqual(event.sourceEventType, "conversation.activity")
+        XCTAssertEqual(event.activityVerb, "update")
+        XCTAssertEqual(event.objectType, "comment")
     }
 
     func testMapsMercuryConversationActivityDeleteToMessageDeleted() throws {
@@ -235,7 +243,7 @@ final class WebexRealtimeEventDecoderTests: XCTestCase {
         XCTAssertEqual(event.knownEvent, .deleted)
         XCTAssertEqual(event.decodeStatus, .known)
         XCTAssertEqual(event.resourceID, "message-delete")
-        XCTAssertEqual(event.ackID, "message-delete")
+        XCTAssertEqual(event.ackID, "mercury-delete")
     }
 
     func testMapsMercuryConversationActivityUnsupportedVerbToUnknownEvent() throws {
@@ -251,10 +259,32 @@ final class WebexRealtimeEventDecoderTests: XCTestCase {
         XCTAssertEqual(event.knownEvent, .unknown("share"))
         XCTAssertEqual(event.decodeStatus, .unknownEvent)
         XCTAssertEqual(event.resourceID, "message-share")
-        XCTAssertEqual(event.ackID, "message-share")
+        XCTAssertEqual(event.ackID, "mercury-share")
     }
 
-    func testMercuryConversationActivityFallsBackToActivityIDForResourceAndAckID() throws {
+    func testDecodesMercuryBufferStateAsKnownInternalEvent() throws {
+        let event = try WebexRealtimeEventDecoder().decode(jsonData("""
+        {
+          "id": "buffer-state-1",
+          "data": {
+            "eventType": "mercury.buffer_state",
+            "state": "IN_SYNC"
+          }
+        }
+        """))
+
+        XCTAssertEqual(event.id, "buffer-state-1")
+        XCTAssertEqual(event.resource, "mercury")
+        XCTAssertEqual(event.event, "buffer_state")
+        XCTAssertEqual(event.knownResource, .unknown("mercury"))
+        XCTAssertEqual(event.knownEvent, .unknown("buffer_state"))
+        XCTAssertEqual(event.decodeStatus, .known)
+        XCTAssertNil(event.resourceID)
+        XCTAssertNil(event.ackID)
+        XCTAssertEqual(event.sourceEventType, "mercury.buffer_state")
+    }
+
+    func testMercuryConversationActivityFallsBackToActivityIDForResourceIDButUsesFrameIDForAckID() throws {
         let event = try decodeMercuryConversationActivity(
             verb: "post",
             activityID: "activity-fallback",
@@ -265,7 +295,7 @@ final class WebexRealtimeEventDecoderTests: XCTestCase {
         XCTAssertEqual(event.event, "created")
         XCTAssertEqual(event.decodeStatus, .known)
         XCTAssertEqual(event.resourceID, "activity-fallback")
-        XCTAssertEqual(event.ackID, "activity-fallback")
+        XCTAssertEqual(event.ackID, "mercury-post")
     }
 
     func testTriggerAdapterUsesEventStreamTrigger() {
@@ -335,10 +365,15 @@ private func decodeJSSDKLikeEvent(
 private func decodeMercuryConversationActivity(
     verb: String,
     activityID: String,
-    objectID: String?
+    objectID: String?,
+    objectType: String? = nil
 ) throws -> WebexRealtimeEvent {
+    let objectTypeJSON = objectType.map { #"""
+            "objectType": "\#($0)",
+    """# } ?? ""
     let objectJSON = objectID.map { #"""
           "object": {
+    \#(objectTypeJSON)
             "id": "\#($0)"
           },
     """# } ?? ""

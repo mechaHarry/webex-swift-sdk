@@ -593,6 +593,234 @@ final class WebexRealtimeConnectionTests: XCTestCase {
         XCTAssertEqual(event?.resourceID, "message-id")
     }
 
+    func testLiveSourceAcknowledgesMercuryFrameIDNotResourceID() async throws {
+        let device = WebexMercuryDevice(
+            id: "device-id",
+            name: "webex-swift-sdk",
+            webSocketURL: URL(string: "wss://mercury.example.com")!
+        )
+        let session = FakeMercurySession(frames: [
+            """
+            {
+              "id": "mercury-frame-id",
+              "data": {
+                "eventType": "conversation.activity",
+                "activity": {
+                  "id": "activity-id",
+                  "verb": "post",
+                  "object": {
+                    "id": "message-id"
+                  },
+                  "target": {
+                    "id": "room-id"
+                  },
+                  "actor": {
+                    "id": "person-id"
+                  }
+                }
+              }
+            }
+            """
+        ])
+        let source = WebexRealtimeLiveConnectionSource(
+            httpClient: NoopHTTPClient(),
+            accessTokenProvider: {
+                AccessTokenState(
+                    value: "access-token",
+                    expiresAt: Date(timeIntervalSince1970: 1_000),
+                    tokenType: "Bearer"
+                )
+            },
+            tokenInvalidator: {},
+            options: WebexRealtimeOptions(),
+            deviceServiceFactory: { _, _, _, _ in
+                FakeDeviceService(device: device)
+            },
+            webSocketFactory: { _ in
+                FakeLiveWebSocket()
+            },
+            sessionFactory: { _, _ in
+                session
+            }
+        )
+        var eventIterator = source.events.makeAsyncIterator()
+
+        source.start()
+        let event = await eventIterator.next()
+
+        XCTAssertEqual(event?.resourceID, "message-id")
+        XCTAssertEqual(event?.ackID, "mercury-frame-id")
+        XCTAssertEqual(session.acknowledgedMessageIDs(), ["mercury-frame-id"])
+    }
+
+    func testLiveSourceReportsDecodedEventAckFailureAndReconnectDiagnostics() async throws {
+        let device = WebexMercuryDevice(
+            id: "device-id",
+            name: "webex-swift-sdk",
+            webSocketURL: URL(string: "wss://mercury.example.com")!
+        )
+        let ackError = WebexSDKError.network("ack rejected")
+        let session = FakeMercurySession(frames: [
+            """
+            {
+              "id": "mercury-frame-id",
+              "data": {
+                "eventType": "conversation.activity",
+                "activity": {
+                  "id": "activity-id",
+                  "verb": "post",
+                  "object": {
+                    "id": "message-id"
+                  },
+                  "target": {
+                    "id": "room-id"
+                  },
+                  "actor": {
+                    "id": "person-id"
+                  }
+                }
+              }
+            }
+            """
+        ], ackError: ackError)
+        let diagnostics = RealtimeDiagnosticRecorder()
+        let source = WebexRealtimeLiveConnectionSource(
+            httpClient: NoopHTTPClient(),
+            accessTokenProvider: {
+                AccessTokenState(
+                    value: "access-token",
+                    expiresAt: Date(timeIntervalSince1970: 1_000),
+                    tokenType: "Bearer"
+                )
+            },
+            tokenInvalidator: {},
+            options: WebexRealtimeOptions(
+                retryPolicy: RetryPolicy(maxAttempts: 2, baseDelay: 1, jitter: 0, maximumDelay: 10),
+                diagnosticHandler: { event in
+                    diagnostics.record(event)
+                }
+            ),
+            deviceServiceFactory: { _, _, _, _ in
+                FakeDeviceService(device: device)
+            },
+            webSocketFactory: { _ in
+                FakeLiveWebSocket()
+            },
+            sessionFactory: { _, _ in
+                session
+            }
+        )
+        var stateIterator = source.states.makeAsyncIterator()
+
+        source.start()
+        let reconnectingState = await firstReconnectingState(from: &stateIterator)
+        let metadata = WebexRealtimeEventMetadata(
+            id: "mercury-frame-id",
+            resource: "messages",
+            event: "created",
+            knownResource: .messages,
+            knownEvent: .created,
+            decodeStatus: .known,
+            resourceID: "message-id",
+            roomID: "room-id",
+            actorID: "person-id",
+            ackID: "mercury-frame-id",
+            sourceEventType: "conversation.activity",
+            activityVerb: "post"
+        )
+
+        XCTAssertEqual(reconnectingState, WebexRealtimeConnectionState.reconnecting(attempt: 1, delay: 1))
+        XCTAssertEqual(diagnostics.events(), [
+            .eventDecoded(metadata),
+            .ackFailed(metadata, error: ackError),
+            .reconnectScheduled(attempt: 1, delay: 1, reason: ackError)
+        ])
+    }
+
+    func testLiveSourceAcknowledgesFilteredMercuryEvents() async throws {
+        let device = WebexMercuryDevice(
+            id: "device-id",
+            name: "webex-swift-sdk",
+            webSocketURL: URL(string: "wss://mercury.example.com")!
+        )
+        let session = FakeMercurySession(frames: [
+            """
+            {
+              "id": "filtered-frame-id",
+              "data": {
+                "eventType": "conversation.activity",
+                "activity": {
+                  "id": "filtered-activity-id",
+                  "verb": "post",
+                  "object": {
+                    "id": "filtered-message-id"
+                  },
+                  "target": {
+                    "id": "room-id"
+                  },
+                  "actor": {
+                    "id": "person-id"
+                  }
+                }
+              }
+            }
+            """
+        ])
+        let diagnostics = RealtimeDiagnosticRecorder()
+        let source = WebexRealtimeLiveConnectionSource(
+            httpClient: NoopHTTPClient(),
+            accessTokenProvider: {
+                AccessTokenState(
+                    value: "access-token",
+                    expiresAt: Date(timeIntervalSince1970: 1_000),
+                    tokenType: "Bearer"
+                )
+            },
+            tokenInvalidator: {},
+            options: WebexRealtimeOptions(
+                events: [.deleted],
+                diagnosticHandler: { event in
+                    diagnostics.record(event)
+                }
+            ),
+            deviceServiceFactory: { _, _, _, _ in
+                FakeDeviceService(device: device)
+            },
+            webSocketFactory: { _ in
+                FakeLiveWebSocket()
+            },
+            sessionFactory: { _, _ in
+                session
+            }
+        )
+        var eventIterator = source.events.makeAsyncIterator()
+
+        source.start()
+        let event = await eventIterator.next()
+        let metadata = WebexRealtimeEventMetadata(
+            id: "filtered-frame-id",
+            resource: "messages",
+            event: "created",
+            knownResource: .messages,
+            knownEvent: .created,
+            decodeStatus: .known,
+            resourceID: "filtered-message-id",
+            roomID: "room-id",
+            actorID: "person-id",
+            ackID: "filtered-frame-id",
+            sourceEventType: "conversation.activity",
+            activityVerb: "post"
+        )
+
+        XCTAssertNil(event)
+        XCTAssertEqual(session.acknowledgedMessageIDs(), ["filtered-frame-id"])
+        XCTAssertEqual(diagnostics.events(), [
+            .eventDecoded(metadata),
+            .eventFilteredOut(metadata),
+            .ackSucceeded(metadata)
+        ])
+    }
+
     func testLiveSourceFilteringHelperExcludesMembershipSeenByDefault() {
         let event = WebexRealtimeEvent(
             resource: "memberships",
@@ -807,12 +1035,14 @@ private final class FakeMercurySession: WebexMercurySession, @unchecked Sendable
     private let lock = NSLock()
     private let framesToEmit: [String]
     private let error: Error?
+    private let ackError: Error?
     private var acknowledged: [String] = []
     private var cancels = 0
 
-    init(frames: [String], error: Error? = nil) {
+    init(frames: [String], error: Error? = nil, ackError: Error? = nil) {
         self.framesToEmit = frames
         self.error = error
+        self.ackError = ackError
     }
 
     func connect() async throws {}
@@ -829,6 +1059,10 @@ private final class FakeMercurySession: WebexMercurySession, @unchecked Sendable
     }
 
     func ack(messageID: String) async throws {
+        if let ackError {
+            throw ackError
+        }
+
         lock.withLock {
             acknowledged.append(messageID)
         }
@@ -843,6 +1077,23 @@ private final class FakeMercurySession: WebexMercurySession, @unchecked Sendable
     func acknowledgedMessageIDs() -> [String] {
         lock.withLock {
             acknowledged
+        }
+    }
+}
+
+private final class RealtimeDiagnosticRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedEvents: [WebexRealtimeDiagnosticEvent] = []
+
+    func record(_ event: WebexRealtimeDiagnosticEvent) {
+        lock.withLock {
+            storedEvents.append(event)
+        }
+    }
+
+    func events() -> [WebexRealtimeDiagnosticEvent] {
+        lock.withLock {
+            storedEvents
         }
     }
 }

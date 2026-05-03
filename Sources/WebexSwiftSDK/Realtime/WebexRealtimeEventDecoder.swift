@@ -18,6 +18,10 @@ struct WebexRealtimeEventDecoder: Sendable {
             return decodeJSSDKLikeEvent(root: root, resource: resource, event: event)
         }
 
+        if let mercuryInternalEvent = decodeMercuryInternalEvent(root: root) {
+            return mercuryInternalEvent
+        }
+
         if let mercuryEvent = decodeMercuryConversationActivity(root: root) {
             return mercuryEvent
         }
@@ -57,6 +61,7 @@ struct WebexRealtimeEventDecoder: Sendable {
             resourceID: resourceID,
             roomID: roomID,
             actorID: actorID,
+            sourceEventType: payload.stringValue(forKey: "eventType"),
             payload: payload
         )
     }
@@ -73,6 +78,26 @@ struct WebexRealtimeEventDecoder: Sendable {
         return payload
     }
 
+    private func decodeMercuryInternalEvent(root: [String: WebexJSONValue]) -> WebexRealtimeEvent? {
+        guard let data = root.objectValue(forKey: "data"),
+              let eventType = data.stringValue(forKey: "eventType"),
+              eventType.hasPrefix("mercury.") else {
+            return nil
+        }
+
+        let event = String(eventType.dropFirst("mercury.".count))
+        return WebexRealtimeEvent(
+            id: root.stringValue(forKey: "id"),
+            resource: "mercury",
+            event: event,
+            knownResource: .unknown("mercury"),
+            knownEvent: .unknown(event),
+            decodeStatus: .known,
+            sourceEventType: eventType,
+            payload: data
+        )
+    }
+
     private func decodeMercuryConversationActivity(root: [String: WebexJSONValue]) -> WebexRealtimeEvent? {
         guard let data = root.objectValue(forKey: "data"),
               data.stringValue(forKey: "eventType") == "conversation.activity",
@@ -85,8 +110,10 @@ struct WebexRealtimeEventDecoder: Sendable {
         let resourceID = activity.objectValue(forKey: "object")?.stringValue(forKey: "id")
             ?? activity.stringValue(forKey: "id")
         let activityID = activity.stringValue(forKey: "id")
+        let ackID = root.stringValue(forKey: "id") ?? activityID
         let roomID = activity.objectValue(forKey: "target")?.stringValue(forKey: "id")
         let actorID = activity.objectValue(forKey: "actor")?.stringValue(forKey: "id")
+        let objectType = activity.objectValue(forKey: "object")?.stringValue(forKey: "objectType")
         let knownEvent = WebexRealtimeEventName(rawValue: event)
 
         return WebexRealtimeEvent(
@@ -99,7 +126,10 @@ struct WebexRealtimeEventDecoder: Sendable {
             resourceID: resourceID,
             roomID: roomID,
             actorID: actorID,
-            ackID: resourceID ?? activityID,
+            ackID: ackID,
+            sourceEventType: "conversation.activity",
+            activityVerb: verb,
+            objectType: objectType,
             payload: activity
         )
     }
@@ -164,6 +194,7 @@ struct WebexRealtimeEventDecoder: Sendable {
     ) -> Bool {
         switch (knownResource, knownEvent) {
         case (.messages, .created),
+             (.messages, .updated),
              (.messages, .deleted),
              (.rooms, .created),
              (.rooms, .updated),

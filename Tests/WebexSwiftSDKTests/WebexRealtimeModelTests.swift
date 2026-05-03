@@ -24,7 +24,7 @@ final class WebexRealtimeModelTests: XCTestCase {
             resourceID: "message-id",
             roomID: "room-id",
             actorID: "actor-id",
-            ackID: "message-id",
+            ackID: "frame-id",
             payload: ["id": .string("message-id")]
         )
 
@@ -35,6 +35,42 @@ final class WebexRealtimeModelTests: XCTestCase {
         XCTAssertEqual(trigger.resourceID, "message-id")
         XCTAssertEqual(trigger.roomID, "room-id")
         XCTAssertEqual(trigger.actorID, "actor-id")
+    }
+
+    func testRealtimeEventMetadataCopiesEventWithoutPayload() {
+        let event = WebexRealtimeEvent(
+            id: "frame-id",
+            resource: "messages",
+            event: "created",
+            knownResource: .messages,
+            knownEvent: .created,
+            decodeStatus: .known,
+            resourceID: "message-id",
+            roomID: "room-id",
+            actorID: "actor-id",
+            ackID: "frame-id",
+            sourceEventType: "conversation.activity",
+            activityVerb: "post",
+            objectType: "comment",
+            payload: ["text": .string("message body")]
+        )
+
+        let metadata = WebexRealtimeEventMetadata(event: event)
+
+        XCTAssertEqual(metadata.id, "frame-id")
+        XCTAssertEqual(metadata.resource, "messages")
+        XCTAssertEqual(metadata.event, "created")
+        XCTAssertEqual(metadata.knownResource, .messages)
+        XCTAssertEqual(metadata.knownEvent, .created)
+        XCTAssertEqual(metadata.decodeStatus, .known)
+        XCTAssertTrue(metadata.isKnown)
+        XCTAssertEqual(metadata.resourceID, "message-id")
+        XCTAssertEqual(metadata.roomID, "room-id")
+        XCTAssertEqual(metadata.actorID, "actor-id")
+        XCTAssertEqual(metadata.ackID, "frame-id")
+        XCTAssertEqual(metadata.sourceEventType, "conversation.activity")
+        XCTAssertEqual(metadata.activityVerb, "post")
+        XCTAssertEqual(metadata.objectType, "comment")
     }
 
     func testRealtimeEventAllowsMissingID() {

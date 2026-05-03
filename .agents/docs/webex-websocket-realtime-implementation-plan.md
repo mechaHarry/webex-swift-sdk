@@ -963,8 +963,23 @@ In the same file add private helpers:
   - Maps `activity.verb == "update"` to `messages:updated`.
   - Maps unsupported verbs to `unknownEvent`.
   - Extracts `activity.object.id`, `activity.target.id`, and `activity.actor.id` when present.
-  - Sets `ackID` when a safe message/activity identifier is available.
+  - Sets `resourceID` from the Webex REST resource id, normally `activity.object.id`.
+  - Sets `ackID` from the Mercury envelope/frame `id`, falling back to `activity.id` only when the envelope id is absent. Do not ACK the REST resource id.
 - An internal `WebexJSONValue.stringValue` extension in this file if one is not already public.
+- Add structured diagnostics for decoded event metadata, filtered-event
+  decisions, ACK success/failure, frame decode failure, and reconnect scheduling
+  reason. Include safe Mercury source fields such as `sourceEventType`,
+  `activityVerb`, and `objectType`; do not require raw payload logging for these
+  diagnostics.
+- ACK decoded Mercury frames even when `WebexRealtimeOptions` filters the event
+  out of app-facing delivery.
+- Prepare the WDM `webSocketUrl` with `outboundWireFormat=text`,
+  `bufferStates=true`, `aliasHttpStatus=true`, and `clientTimestamp` before
+  creating `URLSessionWebSocketTask`; using the raw URL can yield binary frames
+  and force reconnects before JSON event decoding.
+- Decode known internal Mercury frames like `mercury.buffer_state` as
+  `resource=mercury` so diagnostics are meaningful, while default filters keep
+  them out of app-facing streams.
 
 - [ ] **Step 4: Implement trigger adapter**
 
