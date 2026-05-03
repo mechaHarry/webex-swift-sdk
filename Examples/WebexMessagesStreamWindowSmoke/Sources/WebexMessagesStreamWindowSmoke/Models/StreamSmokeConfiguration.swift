@@ -37,7 +37,7 @@ struct StreamSmokeConfiguration: Equatable {
             throw StreamSmokeError.invalidRedirectURI
         }
 
-        let scopes = (environment["WEBEX_SCOPES"] ?? "spark:messages_read")
+        let scopes = (environment["WEBEX_SCOPES"] ?? "spark:all spark:kms")
             .split(whereSeparator: { $0.isWhitespace || $0 == "," })
             .map(String.init)
 
@@ -88,6 +88,7 @@ enum StreamSmokeError: Error, Equatable, CustomStringConvertible {
     case invalidRedirectURI
     case invalidInteger(name: String, value: String, minimum: Int, maximum: Int)
     case failedToOpenAuthorizationURL
+    case missingRealtimeScopes(requested: [String], granted: [String])
 
     var description: String {
         switch self {
@@ -99,6 +100,18 @@ enum StreamSmokeError: Error, Equatable, CustomStringConvertible {
             return "\(name) must be an integer between \(minimum) and \(maximum); received \(value)"
         case .failedToOpenAuthorizationURL:
             return "Failed to open the Webex authorization URL"
+        case .missingRealtimeScopes(let requested, let granted):
+            return [
+                "OAuth token is missing realtime scopes.",
+                "Required: spark:all spark:kms.",
+                "Requested: \(Self.scopeDescription(requested)).",
+                "Granted: \(Self.scopeDescription(granted)).",
+                "Update the Webex integration scopes and reauthorize."
+            ].joined(separator: " ")
         }
+    }
+
+    private static func scopeDescription(_ scopes: [String]) -> String {
+        scopes.isEmpty ? "(none)" : scopes.sorted().joined(separator: " ")
     }
 }

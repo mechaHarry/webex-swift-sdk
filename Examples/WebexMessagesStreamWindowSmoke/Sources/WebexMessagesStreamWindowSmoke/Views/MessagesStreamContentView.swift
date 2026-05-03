@@ -23,6 +23,8 @@ struct MessagesStreamContentView: View {
 
                 HStack(spacing: 12) {
                     statusLabel
+                    Label(model.realtimeStatusText, systemImage: "bolt.horizontal.circle")
+                        .lineLimit(1)
                     Text("Revision \(model.revision)")
                     Text("Updated \(model.lastUpdatedText)")
                     if model.hasMore {

@@ -339,6 +339,13 @@ let task = messagesStream.refreshOnTriggers(connection.triggers) { trigger in
 }
 ```
 
+Do not assume REST IDs and realtime IDs are byte-for-byte identical. In live
+Mercury message events, `trigger.roomID` can be the underlying room UUID, while
+REST list calls commonly use the public base64 Webex ID that decodes to a
+`ciscospark://.../ROOM/<uuid>` URI. Stream predicates that filter a REST-backed
+room by realtime room ID should compare canonical candidates: exact ID, decoded
+URI, and terminal URI component.
+
 The UI still subscribes to `stream.snapshots` and redraws only when a new
 snapshot is emitted. The UI does not need to know whether the refresh came from
 a button, webhook, WebSocket connection, or another trigger source.
