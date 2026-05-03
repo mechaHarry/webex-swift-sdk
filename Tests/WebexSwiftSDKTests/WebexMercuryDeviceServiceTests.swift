@@ -303,6 +303,43 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
         }
     }
 
+    func testWDMDeviceCreateDecodeFailureIdentifiesOperationStatusMissingFieldAndRedactedBody() async throws {
+        let httpClient = MockMercuryDeviceHTTPClient()
+        await enqueueLimitedCatalog(on: httpClient)
+        await httpClient.enqueue(response: httpResponse(
+            url: URL(string: "https://u2c-r.wbx2.com/u2c/api/v1/catalog?format=hostmap")!,
+            statusCode: 200,
+            body: #"{"serviceLinks":{"wdm":"https://wdm.example.com/wdm/api/v1"}}"#
+        ))
+        await httpClient.enqueue(response: httpResponse(
+            url: URL(string: "https://wdm.example.com/wdm/api/v1/devices")!,
+            statusCode: 201,
+            body: #"{"name":"desk","webSocketUrl":"wss://created.example.com?access_token=socket-secret","access_token":"body-secret","normal":"visible"}"#
+        ))
+        let service = makeService(httpClient: httpClient, retryPolicy: RetryPolicy(maxAttempts: 1, baseDelay: 0, jitter: 0, maximumDelay: 10))
+
+        do {
+            _ = try await service.device(options: WebexRealtimeOptions(deviceName: "desk"))
+            XCTFail("Expected WDM device create decode error")
+        } catch let error as WebexSDKError {
+            guard case .network(let message) = error else {
+                XCTFail("Expected network error, got \(error)")
+                return
+            }
+
+            XCTAssertTrue(message.contains("Webex realtime WDM device create response decoding failed"), message)
+            XCTAssertTrue(message.contains("HTTP 201"), message)
+            XCTAssertTrue(message.contains("missing field id"), message)
+            XCTAssertTrue(message.contains("body="), message)
+            XCTAssertTrue(message.contains(#""normal":"visible""#), message)
+            XCTAssertTrue(message.contains("wss://[redacted]"), message)
+            XCTAssertFalse(message.contains("wss://created.example.com"), message)
+            XCTAssertFalse(message.contains("socket-secret"), message)
+            XCTAssertFalse(message.contains("body-secret"), message)
+            XCTAssertFalse(message.contains("realtime-token"), message)
+        }
+    }
+
     private func enqueueLimitedCatalog(
         on httpClient: MockMercuryDeviceHTTPClient,
         u2cURL: String = "https://u2c-r.wbx2.com/u2c/api/v1",

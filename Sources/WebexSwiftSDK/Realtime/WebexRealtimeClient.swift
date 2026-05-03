@@ -291,6 +291,10 @@ internal final class WebexRealtimeLiveConnectionSource: WebexRealtimeConnectionS
             return false
         }
 
+        if isRealtimeSetupDecodingFailure(error: error) {
+            return false
+        }
+
         if case .network = error {
             return true
         }
@@ -343,6 +347,15 @@ internal final class WebexRealtimeLiveConnectionSource: WebexRealtimeConnectionS
 
     private func isAuthFailure(error: WebexSDKError) -> Bool {
         error.apiErrorKind == .unauthorized || error.apiErrorKind == .forbidden
+    }
+
+    private func isRealtimeSetupDecodingFailure(error: WebexSDKError) -> Bool {
+        guard case .network(let message) = error else {
+            return false
+        }
+
+        return message.hasPrefix("Webex realtime ") &&
+            message.contains(" response decoding failed ")
     }
 }
 

@@ -216,7 +216,7 @@ internal struct WebexMercuryDeviceService: Sendable {
         do {
             return try JSONDecoder().decode(Response.self, from: response.data)
         } catch {
-            throw WebexSDKError.network("Webex realtime response decoding failed: \(Redactor.redactSecrets(error.localizedDescription))")
+            throw WebexSDKError.network(decodingErrorMessage(error, response: response, operation: operation))
         }
     }
 
@@ -328,6 +328,50 @@ internal struct WebexMercuryDeviceService: Sendable {
         return "\(fallback): \(redact(message, accessToken: accessToken))"
     }
 
+    private func decodingErrorMessage(_ error: Error, response: HTTPResponse, operation: String) -> String {
+        let statusCode = response.response.statusCode
+        return "Webex realtime \(operation) response decoding failed (HTTP \(statusCode)): " +
+            "\(decodingErrorDetail(error)); body=\(responseBodyPreview(response.data))"
+    }
+
+    private func decodingErrorDetail(_ error: Error) -> String {
+        switch error {
+        case DecodingError.keyNotFound(let key, let context):
+            return "missing field \(codingPathDescription(context.codingPath + [key]))"
+        case DecodingError.typeMismatch(let type, let context):
+            return "type mismatch at \(codingPathDescription(context.codingPath)): expected \(type); " +
+                redact(context.debugDescription, accessToken: nil)
+        case DecodingError.valueNotFound(let type, let context):
+            return "missing value at \(codingPathDescription(context.codingPath)): expected \(type); " +
+                redact(context.debugDescription, accessToken: nil)
+        case DecodingError.dataCorrupted(let context):
+            return "data corrupted at \(codingPathDescription(context.codingPath)): " +
+                redact(context.debugDescription, accessToken: nil)
+        default:
+            return redact(error.localizedDescription, accessToken: nil)
+        }
+    }
+
+    private func codingPathDescription(_ codingPath: [CodingKey]) -> String {
+        let value = codingPath
+            .map(\.stringValue)
+            .filter { !$0.isEmpty }
+            .joined(separator: ".")
+        return value.isEmpty ? "(root)" : value
+    }
+
+    private func responseBodyPreview(_ data: Data) -> String {
+        guard !data.isEmpty else {
+            return "<empty>"
+        }
+
+        guard let value = String(data: data, encoding: .utf8) else {
+            return "<\(data.count) non-UTF8 bytes>"
+        }
+
+        return redact(value, accessToken: nil).singleLinePreview(limit: 2_000)
+    }
+
     private func trackingID(from response: HTTPURLResponse) -> String? {
         for (key, value) in response.allHeaderFields {
             let header = String(describing: key)
@@ -357,6 +401,7 @@ internal struct WebexMercuryDeviceService: Sendable {
 
     private func redact(_ value: String, accessToken: String?) -> String {
         var redacted = Redactor.redactSecrets(value)
+        redacted = redactWebSocketURLs(redacted)
         redacted = redactBearerTokens(redacted)
         if let accessToken, !accessToken.isEmpty {
             redacted = redacted.replacingOccurrences(of: accessToken, with: "[redacted]")
@@ -383,6 +428,20 @@ internal struct WebexMercuryDeviceService: Sendable {
         }
 
         return mutableValue as String
+    }
+
+    private func redactWebSocketURLs(_ value: String) -> String {
+        let expression = try! NSRegularExpression(
+            pattern: #"\bwss://[^\s"'<>)]+"#,
+            options: [.caseInsensitive]
+        )
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        return expression.stringByReplacingMatches(
+            in: value,
+            options: [],
+            range: range,
+            withTemplate: "wss://[redacted]"
+        )
     }
 }
 
@@ -428,5 +487,16 @@ private extension String {
         }
 
         return String(dropLast(suffix.count))
+    }
+
+    func singleLinePreview(limit: Int) -> String {
+        let compact = replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+        guard compact.count > limit else {
+            return compact
+        }
+
+        return String(compact.prefix(limit)) + "...<truncated>"
     }
 }

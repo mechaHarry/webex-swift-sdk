@@ -499,6 +499,48 @@ final class WebexRealtimeConnectionTests: XCTestCase {
         XCTAssertEqual(sessions.requestCount(), 1)
     }
 
+    func testLiveSourceDoesNotRetryRealtimeSetupDecodeFailure() async throws {
+        let error = WebexSDKError.network(
+            #"Webex realtime WDM device create response decoding failed (HTTP 201): missing field id; body={"normal":"visible"}"#
+        )
+        let deviceService = CountingFailingDeviceService(error: error)
+        let sleeper = RealtimeSleepRecorder()
+        let source = WebexRealtimeLiveConnectionSource(
+            httpClient: NoopHTTPClient(),
+            accessTokenProvider: {
+                AccessTokenState(
+                    value: "access-token",
+                    expiresAt: Date(timeIntervalSince1970: 1_000),
+                    tokenType: "Bearer"
+                )
+            },
+            tokenInvalidator: {},
+            options: WebexRealtimeOptions(retryPolicy: RetryPolicy(maxAttempts: 3, baseDelay: 1, jitter: 0, maximumDelay: 10)),
+            deviceServiceFactory: { _, _, _, _ in
+                deviceService
+            },
+            sleeper: { delay in
+                await sleeper.record(delay)
+            }
+        )
+        var stateIterator = source.states.makeAsyncIterator()
+
+        source.start()
+        var states: [WebexRealtimeConnectionState] = []
+        while let state = await stateIterator.next() {
+            states.append(state)
+            if case .failed = state {
+                break
+            }
+        }
+        let requestCount = await deviceService.requestCount()
+        let delays = await sleeper.delays()
+
+        XCTAssertEqual(states, [.discovering, .registeringDevice, .failed(error)])
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertEqual(delays, [])
+    }
+
     func testLiveSourceReconnectsTransientNetworkFailureWithBackoff() async throws {
         let device = WebexMercuryDevice(
             id: "device-id",
@@ -713,6 +755,26 @@ private struct FailingDeviceService: WebexMercuryDeviceProviding {
     }
 
     func invalidateCachedDevice() async {}
+}
+
+private actor CountingFailingDeviceService: WebexMercuryDeviceProviding {
+    private let error: WebexSDKError
+    private var requests = 0
+
+    init(error: WebexSDKError) {
+        self.error = error
+    }
+
+    func device(options: WebexRealtimeOptions) async throws -> WebexMercuryDevice {
+        requests += 1
+        throw error
+    }
+
+    func invalidateCachedDevice() async {}
+
+    func requestCount() -> Int {
+        requests
+    }
 }
 
 private final class InspectableDeviceService: WebexMercuryDeviceProviding, @unchecked Sendable {
