@@ -178,6 +178,9 @@ internal struct WebexMercuryDeviceService: Sendable {
         } else {
             components.path = "/" + path + "/devices"
         }
+        var queryItems = components.queryItems ?? []
+        queryItems.append(URLQueryItem(name: "includeUpstreamServices", value: "all"))
+        components.queryItems = queryItems
 
         guard let url = components.url else {
             throw WebexSDKError.network("Invalid Webex realtime WDM URL")
@@ -191,8 +194,10 @@ internal struct WebexMercuryDeviceService: Sendable {
         request.httpMethod = method
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("webex-swift-sdk/0.1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("webex-swift-sdk_\(UUID().uuidString)", forHTTPHeaderField: "trackingid")
         if body != nil {
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("application/json;charset=utf-8", forHTTPHeaderField: "Content-Type")
         }
         return request
     }
@@ -403,12 +408,12 @@ private struct DeviceResponse: Decodable {
 
 private struct DeviceCreateRequest: Encodable {
     let deviceName: String
-    let deviceType = "DESKTOP"
-    let localizedModel = "Swift"
+    let deviceType = "WEB"
+    let localizedModel = "webex-swift-sdk"
     let model = "webex-swift-sdk"
     let name: String
-    let systemName = "webex-swift-sdk"
-    let systemVersion = "0.1"
+    let systemName = "WEBEX_SWIFT_SDK"
+    let systemVersion = "0.1.0"
 
     init(deviceName: String) {
         self.deviceName = deviceName

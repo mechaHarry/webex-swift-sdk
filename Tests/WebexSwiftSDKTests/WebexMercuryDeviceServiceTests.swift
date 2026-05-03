@@ -27,7 +27,7 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
         XCTAssertEqual(requests.map(\.url?.absoluteString), [
             "https://u2c.wbx2.com/u2c/api/v1/limited/catalog?mode=DEFAULT_BY_PROXIMITY&format=hostmap",
             "https://u2c-r.wbx2.com/u2c/api/v1/catalog?format=hostmap",
-            "https://wdm.example.com/wdm/api/v1/devices"
+            "https://wdm.example.com/wdm/api/v1/devices?includeUpstreamServices=all"
         ])
         XCTAssertNil(requests[0].value(forHTTPHeaderField: "Authorization"))
         XCTAssertEqual(requests[1].value(forHTTPHeaderField: "Authorization"), "Bearer realtime-token")
@@ -55,18 +55,22 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
         let requests = await httpClient.recordedRequests()
         XCTAssertEqual(requests.count, 3)
         XCTAssertEqual(requests[2].httpMethod, "POST")
-        XCTAssertEqual(requests[2].url?.absoluteString, "https://wdm.example.com/wdm/api/v1/devices")
-        XCTAssertEqual(requests[2].value(forHTTPHeaderField: "Content-Type"), "application/json")
+        XCTAssertEqual(requests[2].url?.absoluteString, "https://wdm.example.com/wdm/api/v1/devices?includeUpstreamServices=all")
+        XCTAssertEqual(requests[2].value(forHTTPHeaderField: "Content-Type"), "application/json;charset=utf-8")
+        XCTAssertEqual(requests[2].value(forHTTPHeaderField: "Accept"), "application/json")
+        XCTAssertEqual(requests[2].value(forHTTPHeaderField: "Authorization"), "Bearer realtime-token")
+        XCTAssertTrue(requests[2].value(forHTTPHeaderField: "User-Agent")?.hasPrefix("webex-swift-sdk/") == true)
+        XCTAssertTrue(requests[2].value(forHTTPHeaderField: "trackingid")?.hasPrefix("webex-swift-sdk_") == true)
 
         let body = try XCTUnwrap(requests[2].httpBody)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
         XCTAssertEqual(json["deviceName"], "desk")
-        XCTAssertEqual(json["deviceType"], "DESKTOP")
-        XCTAssertEqual(json["localizedModel"], "Swift")
+        XCTAssertEqual(json["deviceType"], "WEB")
+        XCTAssertEqual(json["localizedModel"], "webex-swift-sdk")
         XCTAssertEqual(json["model"], "webex-swift-sdk")
         XCTAssertEqual(json["name"], "desk")
-        XCTAssertEqual(json["systemName"], "webex-swift-sdk")
-        XCTAssertEqual(json["systemVersion"], "0.1")
+        XCTAssertEqual(json["systemName"], "WEBEX_SWIFT_SDK")
+        XCTAssertEqual(json["systemVersion"], "0.1.0")
     }
 
     func testRegistersDeviceWithoutListingDevicesFirst() async throws {
@@ -92,7 +96,7 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
         XCTAssertEqual(requests.map(\.url?.absoluteString), [
             "https://u2c.wbx2.com/u2c/api/v1/limited/catalog?mode=DEFAULT_BY_PROXIMITY&format=hostmap",
             "https://u2c-r.wbx2.com/u2c/api/v1/catalog?format=hostmap",
-            "https://wdm.example.com/wdm/api/v1/devices"
+            "https://wdm.example.com/wdm/api/v1/devices?includeUpstreamServices=all"
         ])
     }
 
@@ -124,7 +128,7 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
         XCTAssertEqual(requests.map(\.url?.absoluteString), [
             "https://u2c.wbx2.com/u2c/api/v1/limited/catalog?mode=DEFAULT_BY_PROXIMITY&format=hostmap",
             "https://u2c-r.wbx2.com/u2c/api/v1/catalog?format=hostmap",
-            "https://wdm-r.wbx2.com/wdm/api/v1/devices"
+            "https://wdm-r.wbx2.com/wdm/api/v1/devices?includeUpstreamServices=all"
         ])
         XCTAssertNil(requests[0].value(forHTTPHeaderField: "Authorization"))
         XCTAssertEqual(requests[1].value(forHTTPHeaderField: "Authorization"), "Bearer realtime-token")

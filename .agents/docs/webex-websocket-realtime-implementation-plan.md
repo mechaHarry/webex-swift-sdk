@@ -347,7 +347,7 @@ final class WebexMercuryDeviceServiceTests: XCTestCase {
         XCTAssertEqual(requests[2].httpMethod, "POST")
         let body = try XCTUnwrap(requests[2].httpBody)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
-        XCTAssertEqual(json["deviceType"] as? String, "DESKTOP")
+        XCTAssertEqual(json["deviceType"] as? String, "WEB")
         XCTAssertEqual(json["model"] as? String, "webex-swift-sdk")
         XCTAssertEqual(json["name"] as? String, "webex-swift-sdk")
     }
@@ -492,9 +492,10 @@ Implement the private helpers in the same file:
 - Prefer postauth `wdm` when available; fall back to limited `wdm` when postauth catalog returns 401/403.
 - Avoid `GET <wdm>/devices` in the default path; OAuth integration tokens may be allowed to register devices without being allowed to list all devices.
 - In-memory cache reuse is scoped to the live `WebexClient`.
-- `createDevice(wdmURL:options:)` sends `POST <wdm>/devices` with JSON fields `deviceName`, `deviceType`, `localizedModel`, `model`, `name`, `systemName`, `systemVersion`.
+- `createDevice(wdmURL:options:)` sends `POST <wdm>/devices?includeUpstreamServices=all` with JSON fields `deviceName`, `deviceType`, `localizedModel`, `model`, `name`, `systemName`, `systemVersion`.
+- WDM create requests include `User-Agent`, `trackingid`, `Accept: application/json`, and `Content-Type: application/json;charset=utf-8` for body requests.
 - `sendWithRetry(_:)` uses `retryPolicy`, retries transient network errors, 429, and 5xx, and respects `Retry-After`.
-- `authorizedRequest(url:method:body:)` injects `Authorization: Bearer <token>`, `Accept: application/json`, and JSON content type for bodies.
+- `authorizedRequest(url:method:body:)` injects `Authorization: Bearer <token>`, `Accept: application/json`, Webex-style connection headers, and JSON content type for bodies.
 - `decodeDevice(_:)` rejects missing or non-`wss://` `webSocketUrl` with `WebexSDKError.network("Invalid Webex realtime WebSocket URL")`.
 - All thrown messages use `Redactor.redactSecrets`.
 

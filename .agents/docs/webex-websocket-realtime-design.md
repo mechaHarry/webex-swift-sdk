@@ -185,10 +185,19 @@ Do not persist device registration yet. Persist only if smoke testing proves rep
 
 Device identity will be SDK-owned and recognizable, for example:
 
-- `deviceType`: `DESKTOP`
+- `deviceType`: `WEB`
 - `model`: `webex-swift-sdk`
-- `localizedModel`: `Swift`
+- `localizedModel`: `webex-swift-sdk`
 - `name`: stable SDK device name scoped enough to avoid collisions
+- `systemName`: `WEBEX_SWIFT_SDK`
+- `systemVersion`: initial SDK version string
+
+WDM create requests should include `includeUpstreamServices=all`, a
+`trackingid` header prefixed with `webex-swift-sdk_`, a `User-Agent` prefixed
+with `webex-swift-sdk/`, and `Content-Type: application/json;charset=utf-8`.
+This keeps the native Swift implementation closer to the Webex JavaScript SDK
+and Webex bot request shape than a bare REST-style JSON POST, and avoids
+presenting third-party OAuth integrations as first-party desktop devices.
 
 If WebSocket handshake returns 404, treat device registration as stale: discard device info, re-register, and retry up to a small cap before failing.
 
