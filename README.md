@@ -10,7 +10,7 @@ This package provides the OAuth and authenticated REST foundation:
 - PKCE authorization request support
 - Apple-native browser auth boundary
 - SDK-owned loopback redirect listener on `127.0.0.1:8282`
-- Keychain-backed credential and refresh-token storage
+- automatic Keychain-backed credential and refresh-token storage
 - memory-only access-token cache by default
 - coordinated token refresh
 - authenticated REST transport

@@ -3,19 +3,26 @@ import Security
 
 public actor KeychainWebexStore: WebexClientRegistryStore {
     private let service: String
+    private let storage: KeychainWebexStoreStorage
     private let serviceLock: KeychainWebexStoreServiceLock
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private var resolvedAutomaticStorage: KeychainWebexStoreStorage?
 
     public init() {
         self.init(service: KeychainWebexStoreService.defaultService())
     }
 
-    public init(service: String) {
+    public init(
+        service: String,
+        storage: KeychainWebexStoreStorage = .automatic
+    ) {
         self.service = service
+        self.storage = storage
         self.serviceLock = KeychainWebexStoreLockRegistry.shared.lock(for: service)
         self.encoder = JSONEncoder()
         self.decoder = JSONDecoder()
+        self.resolvedAutomaticStorage = nil
     }
 
     public func loadCredential(for accountID: WebexAccountID) async throws -> WebexCredentialRecord? {
@@ -89,31 +96,40 @@ public actor KeychainWebexStore: WebexClientRegistryStore {
     }
 
     private func loadRecord<T: Decodable>(_ type: T.Type, account: String) throws -> T? {
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(loadQuery(account: account) as CFDictionary, &result)
+        for queryStorage in activeStorages() {
+            var result: CFTypeRef?
+            let status = SecItemCopyMatching(loadQuery(account: account, storage: queryStorage) as CFDictionary, &result)
 
-        if status == errSecItemNotFound {
-            return nil
+            if status == errSecItemNotFound {
+                return nil
+            }
+
+            if storage.shouldFallbackToLegacy(after: status, from: queryStorage) {
+                resolvedAutomaticStorage = .legacy
+                return try loadRecord(type, account: account)
+            }
+
+            guard status == errSecSuccess else {
+                throw KeychainWebexStoreError.unhandledStatus(
+                    operation: "load",
+                    status: status,
+                    service: service,
+                    account: account
+                )
+            }
+
+            guard let data = result as? Data else {
+                throw KeychainWebexStoreError.unexpectedItemData(service: service, account: account)
+            }
+
+            do {
+                return try decoder.decode(type, from: data)
+            } catch {
+                throw KeychainWebexStoreError.decodingFailed(account: account)
+            }
         }
 
-        guard status == errSecSuccess else {
-            throw KeychainWebexStoreError.unhandledStatus(
-                operation: "load",
-                status: status,
-                service: service,
-                account: account
-            )
-        }
-
-        guard let data = result as? Data else {
-            throw KeychainWebexStoreError.unexpectedItemData(service: service, account: account)
-        }
-
-        do {
-            return try decoder.decode(type, from: data)
-        } catch {
-            throw KeychainWebexStoreError.decodingFailed(account: account)
-        }
+        return nil
     }
 
     private func saveRecord<T: Encodable>(_ record: T, account: String) throws {
@@ -124,62 +140,111 @@ public actor KeychainWebexStore: WebexClientRegistryStore {
             throw KeychainWebexStoreError.encodingFailed(account: account)
         }
 
-        let updateStatus = SecItemUpdate(
-            baseQuery(account: account) as CFDictionary,
-            updateAttributes(data: data) as CFDictionary
-        )
-
-        switch updateStatus {
-        case errSecSuccess:
-            return
-        case errSecItemNotFound:
-            let addStatus = SecItemAdd(addQuery(account: account, data: data) as CFDictionary, nil)
-            if addStatus == errSecSuccess {
+        for queryStorage in activeStorages() {
+            let status = saveData(data, account: account, storage: queryStorage)
+            if status == errSecSuccess {
                 return
             }
 
-            if addStatus == errSecDuplicateItem {
-                let retryStatus = SecItemUpdate(
-                    baseQuery(account: account) as CFDictionary,
-                    updateAttributes(data: data) as CFDictionary
-                )
-                guard retryStatus == errSecSuccess else {
-                    throw KeychainWebexStoreError.unhandledStatus(
-                        operation: "save",
-                        status: retryStatus,
-                        service: service,
-                        account: account
-                    )
+            if storage.shouldFallbackToLegacy(after: status, from: queryStorage) {
+                resolvedAutomaticStorage = .legacy
+                let retryStatus = saveData(data, account: account, storage: .legacy)
+                if retryStatus == errSecSuccess {
+                    return
                 }
-                return
+
+                throw KeychainWebexStoreError.unhandledStatus(
+                    operation: "save",
+                    status: retryStatus,
+                    service: service,
+                    account: account
+                )
             }
 
             throw KeychainWebexStoreError.unhandledStatus(
                 operation: "save",
-                status: addStatus,
-                service: service,
-                account: account
-            )
-        default:
-            throw KeychainWebexStoreError.unhandledStatus(
-                operation: "save",
-                status: updateStatus,
+                status: status,
                 service: service,
                 account: account
             )
         }
     }
 
-    private func delete(account: String) throws {
-        let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw KeychainWebexStoreError.unhandledStatus(
-                operation: "delete",
-                status: status,
-                service: service,
-                account: account
-            )
+    private func saveData(
+        _ data: Data,
+        account: String,
+        storage queryStorage: KeychainWebexStoreStorage
+    ) -> OSStatus {
+        let updateStatus = SecItemUpdate(
+            baseQuery(account: account, storage: queryStorage) as CFDictionary,
+            updateAttributes(data: data) as CFDictionary
+        )
+
+        guard updateStatus == errSecItemNotFound else {
+            return updateStatus
         }
+
+        let addStatus = SecItemAdd(addQuery(account: account, data: data, storage: queryStorage) as CFDictionary, nil)
+        guard addStatus == errSecDuplicateItem else {
+            return addStatus
+        }
+
+        return SecItemUpdate(
+            baseQuery(account: account, storage: queryStorage) as CFDictionary,
+            updateAttributes(data: data) as CFDictionary
+        )
+    }
+
+    private func delete(account: String) throws {
+        for queryStorage in activeStorages() {
+            let status = SecItemDelete(baseQuery(account: account, storage: queryStorage) as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else {
+                if storage.shouldFallbackToLegacy(after: status, from: queryStorage) {
+                    resolvedAutomaticStorage = .legacy
+                    try delete(account: account)
+                    return
+                }
+
+                throw KeychainWebexStoreError.unhandledStatus(
+                    operation: "delete",
+                    status: status,
+                    service: service,
+                    account: account
+                )
+            }
+        }
+    }
+
+    private func activeStorages() -> [KeychainWebexStoreStorage] {
+        switch storage {
+        case .automatic:
+            if let resolvedAutomaticStorage {
+                return [resolvedAutomaticStorage]
+            }
+
+            let detectedStorage = Self.detectAutomaticStorage(service: service)
+            resolvedAutomaticStorage = detectedStorage
+            return [detectedStorage]
+        case .dataProtection, .legacy:
+            return storage.queryStorages
+        }
+    }
+
+    private static func detectAutomaticStorage(service: String) -> KeychainWebexStoreStorage {
+        let account = "storage-probe:\(UUID().uuidString)"
+        let query = KeychainWebexStoreQuery(service: service, account: account, storage: .dataProtection)
+        let status = SecItemAdd(query.add(data: Data("probe".utf8)) as CFDictionary, nil)
+
+        if status == errSecSuccess {
+            _ = SecItemDelete(query.base as CFDictionary)
+            return .dataProtection
+        }
+
+        if KeychainWebexStoreStorage.isMissingEntitlement(status) {
+            return .legacy
+        }
+
+        return .dataProtection
     }
 
     private func withServiceLock<T>(_ operation: () throws -> T) throws -> T {
@@ -295,26 +360,26 @@ public actor KeychainWebexStore: WebexClientRegistryStore {
         }
     }
 
-    private func baseQuery(account: String) -> [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account
-        ]
+    private func baseQuery(
+        account: String,
+        storage queryStorage: KeychainWebexStoreStorage
+    ) -> [String: Any] {
+        keychainQuery(account: account, storage: queryStorage).base
     }
 
-    private func loadQuery(account: String) -> [String: Any] {
-        var query = baseQuery(account: account)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        return query
+    private func loadQuery(
+        account: String,
+        storage queryStorage: KeychainWebexStoreStorage
+    ) -> [String: Any] {
+        keychainQuery(account: account, storage: queryStorage).load
     }
 
-    private func addQuery(account: String, data: Data) -> [String: Any] {
-        var query = baseQuery(account: account)
-        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        query[kSecValueData as String] = data
-        return query
+    private func addQuery(
+        account: String,
+        data: Data,
+        storage queryStorage: KeychainWebexStoreStorage
+    ) -> [String: Any] {
+        keychainQuery(account: account, storage: queryStorage).add(data: data)
     }
 
     private func updateAttributes(data: Data) -> [String: Any] {
@@ -323,11 +388,80 @@ public actor KeychainWebexStore: WebexClientRegistryStore {
         ]
     }
 
+    private func keychainQuery(
+        account: String,
+        storage queryStorage: KeychainWebexStoreStorage
+    ) -> KeychainWebexStoreQuery {
+        KeychainWebexStoreQuery(service: service, account: account, storage: queryStorage)
+    }
+
     private enum RecordKind: String {
         case credential
         case token
         case metadata
         case accountIndex = "account-index"
+    }
+}
+
+public enum KeychainWebexStoreStorage: Equatable, Sendable {
+    case automatic
+    case dataProtection
+    case legacy
+
+    var queryStorages: [KeychainWebexStoreStorage] {
+        switch self {
+        case .automatic:
+            return [.dataProtection, .legacy]
+        case .dataProtection:
+            return [.dataProtection]
+        case .legacy:
+            return [.legacy]
+        }
+    }
+
+    func shouldFallbackToLegacy(
+        after status: OSStatus,
+        from attemptedStorage: KeychainWebexStoreStorage
+    ) -> Bool {
+        self == .automatic &&
+            attemptedStorage == .dataProtection &&
+            Self.isMissingEntitlement(status)
+    }
+
+    static func isMissingEntitlement(_ status: OSStatus) -> Bool {
+        status == OSStatus(-34018) || status == OSStatus(34018)
+    }
+}
+
+struct KeychainWebexStoreQuery {
+    let service: String
+    let account: String
+    let storage: KeychainWebexStoreStorage
+
+    var base: [String: Any] {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        if storage == .dataProtection {
+            query[kSecUseDataProtectionKeychain as String] = true
+        }
+        return query
+    }
+
+    var load: [String: Any] {
+        var query = base
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        return query
+    }
+
+    func add(data: Data) -> [String: Any] {
+        var query = base
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        query[kSecValueData as String] = data
+        return query
     }
 }
 
