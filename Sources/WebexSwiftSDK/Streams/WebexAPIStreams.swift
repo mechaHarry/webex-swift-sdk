@@ -43,6 +43,13 @@ public extension MessagesAPI {
             }
         )
     }
+
+    func threadedStream(
+        params: ListMessagesParams,
+        pageLimit: Int? = nil
+    ) -> MessagesThreadStream {
+        MessagesThreadStream(flatStream: stream(params: params, pageLimit: pageLimit))
+    }
 }
 
 public extension MembershipsAPI {

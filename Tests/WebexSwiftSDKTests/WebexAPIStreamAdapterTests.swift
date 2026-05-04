@@ -55,6 +55,27 @@ final class WebexAPIStreamAdapterTests: XCTestCase {
         ])
     }
 
+    func testMessagesThreadedStreamUsesMessagesListAndProjectsThreads() async throws {
+        let httpClient = StreamAdapterHTTPClient()
+        await httpClient.enqueue(
+            json: #"{"items":[{"id":"parent","roomId":"room-1","text":"Parent"},{"id":"child","roomId":"room-1","text":"Child","parentId":"parent"}]}"#
+        )
+
+        let stream = makeMessagesAPI(httpClient: httpClient)
+            .threadedStream(params: .init(roomID: "room-1", max: 2), pageLimit: 1)
+
+        await stream.refresh()
+
+        let snapshot = await stream.currentSnapshot()
+        XCTAssertEqual(snapshot.topLevelMessageIDs, ["parent"])
+        XCTAssertEqual(snapshot.threadEntryByID["parent"]?.childIDs, ["child"])
+
+        let requestURLs = await httpClient.requestURLs
+        XCTAssertEqual(requestURLs, [
+            "https://webexapis.com/v1/messages?roomId=room-1&max=2"
+        ])
+    }
+
     func testMembershipsStreamUsesMembershipsListAndNextPage() async throws {
         let httpClient = StreamAdapterHTTPClient()
         await httpClient.enqueue(
