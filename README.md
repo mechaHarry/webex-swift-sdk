@@ -68,6 +68,20 @@ The `max` parameter remains the Webex REST page size. The stream `pageLimit`
 is only a local safety cap for how many pages explicit `loadNextPage()` calls
 may accumulate before the stream reports `pagination.capReached`.
 
+Space streams enrich each `WebexSpace` item with SDK-derived details such as
+`item.enriched.teamName` and `item.enriched.spaceAvatar`. Direct REST calls
+remain wire-faithful: `client.spaces.list` and `client.spaces.get` do not make
+follow-up enrichment calls and decode `space.enriched == .empty`. Use
+`await stream.refreshEnrichment()` to refresh cached enrichment details without
+reloading the base spaces page.
+
+Migration note: `SpacesStream` and `RoomsStream` are now named stream wrapper
+types instead of aliases to `WebexSnapshotStream<WebexSpace>`. Existing client
+code that consumes `stream.snapshots`, `currentSnapshot()`, `refresh()`,
+`loadNextPage()`, or `refreshOnTriggers` can keep those calls. Code that
+constructed `WebexSnapshotStream<WebexSpace>` directly or accepted that concrete
+generic type should accept `SpacesStream`/`RoomsStream` instead.
+
 ## Realtime
 
 Realtime support is an experimental Swift-native WebSocket listener exposed

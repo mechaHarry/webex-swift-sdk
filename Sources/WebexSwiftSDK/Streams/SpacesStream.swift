@@ -67,9 +67,13 @@ public final class SpacesStream: @unchecked Sendable {
                 await operationGate.finish(operation)
             }
         ) { [self] in
+            let previousSnapshot = await baseStream.currentSnapshot()
             await baseStream.loadNextPage()
             let snapshot = await baseStream.currentSnapshot()
             guard snapshot.lastError == nil else {
+                return
+            }
+            guard snapshot.revision != previousSnapshot.revision else {
                 return
             }
             await runEnrichment(forceRefresh: false, operation: operation, snapshot: snapshot)

@@ -93,6 +93,29 @@ final class SpacesStreamTests: XCTestCase {
         XCTAssertEqual(dependencies.teamRequests, ["team-1", "team-1"])
     }
 
+    func testLoadNextPageWithoutNextPageDoesNotRefreshEnrichment() async throws {
+        let dependencies = RecordingSpacesStreamDependencies()
+        dependencies.teamByID["team-1"] = WebexTeam(id: "team-1", name: "Platform")
+        let baseStream = WebexSnapshotStream<WebexSpace>(
+            id: { $0.id },
+            loadFirstPage: { WebexStreamPage(items: [], nextPage: nil) },
+            loadNextPage: { _ in WebexStreamPage(items: [], nextPage: nil) }
+        )
+        let space = WebexSpace(id: "space-1", title: "Space", type: .group, teamID: "team-1")
+        await baseStream.replaceItems([space])
+        let stream = SpacesStream(
+            baseStream: baseStream,
+            enricher: WebexSpaceEnrichmentCoordinator(dependencies: dependencies.makeDependencies())
+        )
+
+        await stream.loadNextPage()
+
+        let snapshot = await stream.currentSnapshot()
+        XCTAssertEqual(snapshot.items, [space])
+        XCTAssertFalse(snapshot.pagination.hasMore)
+        XCTAssertEqual(dependencies.teamRequests, [])
+    }
+
     func testFailedRefreshDoesNotCallEnrichmentDependencies() async throws {
         let loader = ControllableSpacesPageLoader()
         let dependencies = RecordingSpacesStreamDependencies()
