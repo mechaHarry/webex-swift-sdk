@@ -351,6 +351,49 @@ final class SpacesStreamTests: XCTestCase {
         XCTAssertEqual(snapshot.items.first?.enriched.teamName, "Old")
         queuedRefresh.cancel()
     }
+
+    func testQueuedRefreshFailureDoesNotLeaveActiveEnrichmentLoading() async throws {
+        let loader = ControllableSpacesPageLoader()
+        let dependencies = PausingSpacesStreamDependencies()
+        await dependencies.setTeam(WebexTeam(id: "team-1", name: "Old"))
+        let stream = SpacesStream(
+            baseStream: WebexSnapshotStream<WebexSpace>(
+                id: { $0.id },
+                loadFirstPage: { try await loader.loadFirstPage() },
+                loadNextPage: { try await loader.loadNextPage($0) }
+            ),
+            enricher: WebexSpaceEnrichmentCoordinator(dependencies: dependencies.makeDependencies())
+        )
+
+        let initialRefresh = Task { await stream.refresh() }
+        let didStartInitialRefresh = await loader.waitForFirstPageCallCount(1)
+        XCTAssertTrue(didStartInitialRefresh)
+        await loader.succeedFirstPage(items: [
+            WebexSpace(id: "space-1", title: "Old Space", type: .group, teamID: "team-1")
+        ])
+        await initialRefresh.value
+
+        await dependencies.setTeam(WebexTeam(id: "team-1", name: "Manual"))
+        await dependencies.pauseTeam("team-1")
+        let pausedEnrichment = Task { await stream.refreshEnrichment() }
+        await dependencies.waitForPausedTeamRequest("team-1")
+
+        let queuedRefresh = Task { await stream.refresh() }
+        await dependencies.resumeTeam("team-1")
+        await pausedEnrichment.value
+
+        let didStartQueuedRefresh = await loader.waitForFirstPageCallCount(2)
+        XCTAssertTrue(didStartQueuedRefresh)
+        await loader.failFirstPage(WebexSDKError.network("rooms unavailable"))
+        await queuedRefresh.value
+
+        let snapshot = await stream.currentSnapshot()
+        XCTAssertEqual(snapshot.lastError, .network("rooms unavailable"))
+        XCTAssertEqual(snapshot.items.first?.enriched.status, .complete)
+        XCTAssertEqual(snapshot.items.first?.enriched.teamName, "Manual")
+        let teamRequests = await dependencies.teamRequestsValue()
+        XCTAssertEqual(teamRequests, ["team-1", "team-1"])
+    }
 }
 
 private func nextSnapshot(

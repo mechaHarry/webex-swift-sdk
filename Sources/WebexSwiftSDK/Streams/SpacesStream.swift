@@ -135,12 +135,19 @@ public final class SpacesStream: @unchecked Sendable {
             for: snapshot.items,
             forceRefresh: forceRefresh
         )
-        guard await operationGate.canCommit(operation) else {
-            return
+        let didEmitLoading: Bool
+        if await operationGate.canCommitCache(operation) {
+            await baseStream.replaceItems(loadingItems, incrementRevision: false)
+            didEmitLoading = true
+        } else {
+            didEmitLoading = false
         }
-        await baseStream.replaceItems(loadingItems, incrementRevision: false)
 
         guard !Task.isCancelled else {
+            return
+        }
+
+        guard didEmitLoading else {
             return
         }
 
@@ -148,15 +155,27 @@ public final class SpacesStream: @unchecked Sendable {
             for: snapshot.items,
             forceRefresh: forceRefresh,
             shouldCommitCache: { [operationGate] in
-                await operationGate.canCommit(operation)
+                await operationGate.canCommitCache(operation)
             }
         )
-        guard await operationGate.canCommit(operation) else {
+        guard await canReplaceItems(from: snapshot, operation: operation) else {
             return
         }
         if enrichedItems != loadingItems {
             await baseStream.replaceItems(enrichedItems, incrementRevision: true)
         }
+    }
+
+    private func canReplaceItems(
+        from snapshot: WebexStreamSnapshot<WebexSpace>,
+        operation: SpacesStreamOperation
+    ) async -> Bool {
+        guard await operationGate.isRunning(operation) else {
+            return false
+        }
+
+        let currentSnapshot = await baseStream.currentSnapshot()
+        return currentSnapshot.revision == snapshot.revision
     }
 }
 
@@ -280,11 +299,15 @@ private actor SpacesStreamOperationGate {
         running.remove(operation.id)
     }
 
-    func canCommit(_ operation: SpacesStreamOperation) -> Bool {
+    func canCommitCache(_ operation: SpacesStreamOperation) -> Bool {
         pruneCancelledPending()
         return running.contains(operation.id)
             && !pending.keys.contains(where: { $0 > operation.id })
             && !running.contains(where: { $0 > operation.id })
+    }
+
+    func isRunning(_ operation: SpacesStreamOperation) -> Bool {
+        running.contains(operation.id)
     }
 
     private func pruneCancelledPending() {
