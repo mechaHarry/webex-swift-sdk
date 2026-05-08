@@ -201,14 +201,13 @@ final class SpacesStreamTests: XCTestCase {
         XCTAssertEqual(snapshot.items.first?.enriched.teamName, "Second")
         let firstPageCallCount = await loader.firstPageCallCountValue()
         XCTAssertEqual(firstPageCallCount, 2)
-        XCTAssertEqual(dependencies.teamRequests, ["team-1", "team-2"])
+        XCTAssertEqual(dependencies.teamRequests, ["team-2"])
     }
 
     func testQueuedRefreshPreventsStaleForceRefreshCachePoisoningFinalSnapshot() async throws {
         let loader = ControllableSpacesPageLoader()
         let dependencies = PausingSpacesStreamDependencies()
         await dependencies.setTeam(WebexTeam(id: "team-1", name: "Old"))
-        await dependencies.setTeam(WebexTeam(id: "team-2", name: "New"))
         let stream = SpacesStream(
             baseStream: WebexSnapshotStream<WebexSpace>(
                 id: { $0.id },
@@ -232,6 +231,7 @@ final class SpacesStreamTests: XCTestCase {
         await dependencies.waitForPausedTeamRequest("team-1")
 
         let refresh = Task { await stream.refresh() }
+        await dependencies.setTeam(WebexTeam(id: "team-1", name: "Fresh"))
         await dependencies.resumeTeam("team-1")
         await staleForceRefresh.value
 
@@ -242,15 +242,32 @@ final class SpacesStreamTests: XCTestCase {
             return
         }
         await loader.succeedFirstPage(items: [
-            WebexSpace(id: "space-2", title: "New Space", type: .group, teamID: "team-2")
+            WebexSpace(id: "space-2", title: "Fresh Space", type: .group, teamID: "team-1")
         ])
         await refresh.value
 
         let snapshot = await stream.currentSnapshot()
         XCTAssertEqual(snapshot.items.map(\.id), ["space-2"])
-        XCTAssertEqual(snapshot.items.first?.enriched.teamName, "New")
+        XCTAssertEqual(snapshot.items.first?.enriched.teamName, "Fresh")
         let teamRequests = await dependencies.teamRequestsValue()
-        XCTAssertEqual(teamRequests, ["team-1", "team-1", "team-2"])
+        XCTAssertEqual(teamRequests, ["team-1", "team-1", "team-1"])
+
+        await dependencies.setTeam(WebexTeam(id: "team-1", name: "Fresh Again"))
+        let ordinaryRefresh = Task { await stream.refresh() }
+        let didStartOrdinaryRefresh = await loader.waitForFirstPageCallCount(3)
+        XCTAssertTrue(didStartOrdinaryRefresh)
+        guard didStartOrdinaryRefresh else {
+            await ordinaryRefresh.value
+            return
+        }
+        await loader.succeedFirstPage(items: [
+            WebexSpace(id: "space-3", title: "Cached Space", type: .group, teamID: "team-1")
+        ])
+        await ordinaryRefresh.value
+
+        let cachedSnapshot = await stream.currentSnapshot()
+        XCTAssertEqual(cachedSnapshot.items.map(\.id), ["space-3"])
+        XCTAssertEqual(cachedSnapshot.items.first?.enriched.teamName, "Fresh Again")
     }
 }
 
@@ -371,6 +388,7 @@ private actor PausingSpacesStreamDependencies {
 
     private func team(_ teamID: String) async -> WebexTeam {
         teamRequests.append(teamID)
+        let team = teamByID[teamID] ?? WebexTeam(id: teamID)
         if pausedTeamIDs.contains(teamID) {
             await withCheckedContinuation { continuation in
                 pausedTeamContinuations[teamID, default: []].append(continuation)
@@ -381,7 +399,7 @@ private actor PausingSpacesStreamDependencies {
             }
         }
 
-        return teamByID[teamID] ?? WebexTeam(id: teamID)
+        return team
     }
 }
 

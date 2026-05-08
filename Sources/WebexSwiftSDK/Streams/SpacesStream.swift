@@ -23,20 +23,20 @@ public final class SpacesStream: @unchecked Sendable {
     }
 
     public func refresh() async {
+        let generationID = await generation.next()
         await operationQueue.run { [self] in
-            let generationID = await generation.next()
             await baseStream.refresh()
             let snapshot = await baseStream.currentSnapshot()
             guard snapshot.lastError == nil else {
                 return
             }
-            await runEnrichment(forceRefresh: false, generationID: generationID, snapshot: snapshot)
+            await runEnrichment(forceRefresh: true, generationID: generationID, snapshot: snapshot)
         }
     }
 
     public func loadNextPage() async {
+        let generationID = await generation.next()
         await operationQueue.run { [self] in
-            let generationID = await generation.next()
             await baseStream.loadNextPage()
             let snapshot = await baseStream.currentSnapshot()
             guard snapshot.lastError == nil else {
@@ -47,8 +47,8 @@ public final class SpacesStream: @unchecked Sendable {
     }
 
     public func refreshEnrichment() async {
+        let generationID = await generation.next()
         await operationQueue.run { [self] in
-            let generationID = await generation.next()
             let snapshot = await baseStream.currentSnapshot()
             await runEnrichment(forceRefresh: true, generationID: generationID, snapshot: snapshot)
         }
@@ -93,7 +93,10 @@ public final class SpacesStream: @unchecked Sendable {
 
         let enrichedItems = await enricher.enrichedItems(
             for: snapshot.items,
-            forceRefresh: forceRefresh
+            forceRefresh: forceRefresh,
+            shouldCommitCache: { [generation] in
+                await generation.isCurrent(generationID)
+            }
         )
         guard await generation.isCurrent(generationID) else {
             return

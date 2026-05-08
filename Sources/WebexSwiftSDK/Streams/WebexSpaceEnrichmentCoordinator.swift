@@ -84,7 +84,8 @@ actor WebexSpaceEnrichmentCoordinator {
 
     func enrichedItems(
         for spaces: [WebexSpace],
-        forceRefresh: Bool
+        forceRefresh: Bool,
+        shouldCommitCache: @escaping @Sendable () async -> Bool = { true }
     ) async -> [WebexSpace] {
         var enriched: [WebexSpace] = []
         enriched.reserveCapacity(spaces.count)
@@ -99,11 +100,21 @@ actor WebexSpaceEnrichmentCoordinator {
             var values = FieldValues()
 
             if applicable.contains(.teamName), let teamID = space.teamID {
-                await resolveTeamName(teamID: teamID, forceRefresh: forceRefresh, values: &values)
+                await resolveTeamName(
+                    teamID: teamID,
+                    forceRefresh: forceRefresh,
+                    shouldCommitCache: shouldCommitCache,
+                    values: &values
+                )
             }
 
             if applicable.contains(.spaceAvatar) {
-                await resolveSpaceAvatar(spaceID: space.id, forceRefresh: forceRefresh, values: &values)
+                await resolveSpaceAvatar(
+                    spaceID: space.id,
+                    forceRefresh: forceRefresh,
+                    shouldCommitCache: shouldCommitCache,
+                    values: &values
+                )
             }
 
             enriched.append(space.replacingEnrichment(WebexSpaceEnrichment(
@@ -124,6 +135,7 @@ actor WebexSpaceEnrichmentCoordinator {
     private func resolveTeamName(
         teamID: String,
         forceRefresh: Bool,
+        shouldCommitCache: @escaping @Sendable () async -> Bool,
         values: inout FieldValues
     ) async {
         if !forceRefresh, let cached = teamNameByID[teamID] {
@@ -133,7 +145,9 @@ actor WebexSpaceEnrichmentCoordinator {
 
         do {
             let team = try await dependencies.getTeam(teamID)
-            teamNameByID[teamID] = team.name
+            if await shouldCommitCache() {
+                teamNameByID[teamID] = team.name
+            }
             values.teamName = team.name
         } catch {
             values.errors.append(WebexSpaceEnrichmentError(
@@ -146,13 +160,20 @@ actor WebexSpaceEnrichmentCoordinator {
     private func resolveSpaceAvatar(
         spaceID: String,
         forceRefresh: Bool,
+        shouldCommitCache: @escaping @Sendable () async -> Bool,
         values: inout FieldValues
     ) async {
         do {
-            let otherPersonID = try await otherPersonID(for: spaceID, forceRefresh: forceRefresh)
+            let otherPersonID = try await otherPersonID(
+                for: spaceID,
+                forceRefresh: forceRefresh,
+                shouldCommitCache: shouldCommitCache
+            )
             guard let otherPersonID else {
                 let error = missingDirectSpaceParticipantError()
-                spaceAvatarErrorBySpaceID[spaceID] = error
+                if await shouldCommitCache() {
+                    spaceAvatarErrorBySpaceID[spaceID] = error
+                }
                 values.errors.append(error)
                 return
             }
@@ -163,8 +184,10 @@ actor WebexSpaceEnrichmentCoordinator {
             }
 
             let person = try await dependencies.getPerson(otherPersonID)
-            spaceAvatarErrorBySpaceID[spaceID] = nil
-            avatarByPersonID[otherPersonID] = person.avatar
+            if await shouldCommitCache() {
+                spaceAvatarErrorBySpaceID[spaceID] = nil
+                avatarByPersonID[otherPersonID] = person.avatar
+            }
             values.spaceAvatar = person.avatar
         } catch {
             values.errors.append(WebexSpaceEnrichmentError(
@@ -176,7 +199,8 @@ actor WebexSpaceEnrichmentCoordinator {
 
     private func otherPersonID(
         for spaceID: String,
-        forceRefresh: Bool
+        forceRefresh: Bool,
+        shouldCommitCache: @escaping @Sendable () async -> Bool
     ) async throws -> String? {
         if !forceRefresh {
             switch otherPersonIDBySpaceID[spaceID] {
@@ -194,7 +218,9 @@ actor WebexSpaceEnrichmentCoordinator {
             selfID = cachedSelfPersonID
         } else {
             let me = try await dependencies.getSelf()
-            selfPersonID = me.id
+            if await shouldCommitCache() {
+                selfPersonID = me.id
+            }
             selfID = me.id
         }
 
@@ -203,10 +229,12 @@ actor WebexSpaceEnrichmentCoordinator {
             .compactMap(\.personID)
             .first { $0 != selfID }
 
-        if let otherPersonID {
-            otherPersonIDBySpaceID[spaceID] = .personID(otherPersonID)
-        } else {
-            otherPersonIDBySpaceID[spaceID] = .missing
+        if await shouldCommitCache() {
+            if let otherPersonID {
+                otherPersonIDBySpaceID[spaceID] = .personID(otherPersonID)
+            } else {
+                otherPersonIDBySpaceID[spaceID] = .missing
+            }
         }
         return otherPersonID
     }
