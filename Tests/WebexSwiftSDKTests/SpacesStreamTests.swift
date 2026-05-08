@@ -231,7 +231,7 @@ final class SpacesStreamTests: XCTestCase {
 
         await baseStream.replaceItems([
             WebexSpace(
-                id: "space-2",
+                id: "space-1",
                 title: "Newer Space",
                 type: .group,
                 teamID: "team-2",
@@ -242,7 +242,8 @@ final class SpacesStreamTests: XCTestCase {
         await staleEnrichment.value
 
         let snapshot = await stream.currentSnapshot()
-        XCTAssertEqual(snapshot.items.map(\.id), ["space-2"])
+        XCTAssertEqual(snapshot.items.map(\.id), ["space-1"])
+        XCTAssertEqual(snapshot.items.first?.title, "Newer Space")
         XCTAssertEqual(snapshot.items.first?.enriched.teamName, "Newer")
         XCTAssertEqual(snapshot.items.first?.enriched.status, .complete)
     }

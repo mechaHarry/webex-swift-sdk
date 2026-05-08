@@ -119,6 +119,13 @@ final class WebexAPIStreamAdapterTests: XCTestCase {
         XCTAssertEqual(space.enriched.status, .failed)
         XCTAssertEqual(space.enriched.errors.first?.field, .teamName)
         XCTAssertFalse(String(describing: space.enriched.errors.first?.error).contains("secret-access-token"))
+        let requestURLs = await httpClient.requestURLs
+        XCTAssertEqual(requestURLs, [
+            "https://webexapis.com/v1/rooms?max=1",
+            "https://webexapis.com/v1/teams/team-1",
+            "https://webexapis.com/v1/teams/team-1",
+            "https://webexapis.com/v1/teams/team-1"
+        ])
     }
 
     func testMessagesStreamUsesMessagesListAndNextPage() async throws {
