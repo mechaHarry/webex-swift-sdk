@@ -2,6 +2,26 @@ import XCTest
 @testable import WebexSwiftSDK
 
 final class SpacesAPITests: XCTestCase {
+    func testSpaceDecodesWithEmptyEnrichment() throws {
+        let json = Data("""
+        {
+          "id": "space-id",
+          "title": "General",
+          "type": "group",
+          "teamId": "team-id"
+        }
+        """.utf8)
+
+        let space = try JSONDecoder().decode(WebexSpace.self, from: json)
+
+        XCTAssertEqual(space.id, "space-id")
+        XCTAssertEqual(space.enriched, .empty)
+        XCTAssertNil(space.enriched.teamName)
+        XCTAssertNil(space.enriched.spaceAvatar)
+        XCTAssertEqual(space.enriched.status, .empty)
+        XCTAssertEqual(space.enriched.errors, [])
+    }
+
     func testSpaceDecodesKnownFieldsAndPartialErrors() throws {
         let json = Data("""
         {

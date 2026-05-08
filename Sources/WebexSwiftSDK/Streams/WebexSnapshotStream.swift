@@ -110,6 +110,13 @@ public final class WebexSnapshotStream<Item: Sendable>: @unchecked Sendable {
         await state.loadNextPage()
     }
 
+    func replaceItems(
+        _ items: [Item],
+        incrementRevision: Bool = true
+    ) async {
+        await state.replaceItems(items, incrementRevision: incrementRevision)
+    }
+
     public func refreshOnTriggers(
         _ triggers: AsyncStream<WebexStreamTrigger>,
         where shouldRefresh: @escaping @Sendable (WebexStreamTrigger) -> Bool = { _ in true }
@@ -206,6 +213,17 @@ private actor WebexSnapshotStreamState<Item: Sendable> {
         emitSnapshot()
     }
 
+    func replaceItems(
+        _ newItems: [Item],
+        incrementRevision: Bool
+    ) {
+        items = newItems
+        if incrementRevision {
+            revision += 1
+        }
+        emitSnapshot()
+    }
+
     func loadNextPage() async {
         guard !isRefreshing,
               !isLoadingNextPage,
@@ -288,49 +306,6 @@ private actor WebexSnapshotStreamState<Item: Sendable> {
     }
 
     private static func webexStreamError(from error: Error) -> WebexSDKError {
-        switch error {
-        case let sdkError as WebexSDKError:
-            return redacted(sdkError)
-        default:
-            return .network(Redactor.redactOAuthCallback(error.localizedDescription))
-        }
-    }
-
-    private static func redacted(_ error: WebexSDKError) -> WebexSDKError {
-        switch error {
-        case .invalidAccountID(let rawValue):
-            return .invalidAccountID(Redactor.redactSecrets(rawValue))
-        case .invalidAuthorizationCallback(let callback):
-            return .invalidAuthorizationCallback(Redactor.redactOAuthCallback(callback))
-        case .authorizationStateMismatch,
-             .userCancelledAuthorization,
-             .missingCredential,
-             .missingRefreshToken,
-             .reauthenticationRequired,
-             .rateLimited:
-            return error
-        case .duplicateAccount(let existing, let reason):
-            return .duplicateAccount(existing: existing, reason: Redactor.redactSecrets(reason))
-        case .tokenExchangeFailed(let statusCode, let message, let trackingID):
-            return .tokenExchangeFailed(
-                statusCode: statusCode,
-                message: Redactor.redactSecrets(message),
-                trackingID: trackingID.map(Redactor.redactSecrets)
-            )
-        case .locked(let retryAfter, let trackingID, let message):
-            return .locked(
-                retryAfter: retryAfter,
-                trackingID: trackingID.map(Redactor.redactSecrets),
-                message: Redactor.redactSecrets(message)
-            )
-        case .webexAPI(let statusCode, let trackingID, let message):
-            return .webexAPI(
-                statusCode: statusCode,
-                trackingID: trackingID.map(Redactor.redactSecrets),
-                message: Redactor.redactSecrets(message)
-            )
-        case .network(let message):
-            return .network(Redactor.redactOAuthCallback(message))
-        }
+        WebexStreamErrorRedactor.webexStreamError(from: error)
     }
 }

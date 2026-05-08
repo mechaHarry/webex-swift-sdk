@@ -140,6 +140,42 @@ final class WebexSnapshotStreamTests: XCTestCase {
         XCTAssertFalse(failedSnapshot.isRefreshing)
     }
 
+    func testReplaceItemsEmitsSnapshotWithoutChangingPagination() async throws {
+        let nextPage = WebexPageLink(url: URL(string: "https://webexapis.com/v1/rooms?cursor=next")!)
+        let loader = ControllableStreamPageLoader()
+        let stream = WebexSnapshotStream<StreamTestItem>(
+            pageLimit: 3,
+            id: { $0.id },
+            loadFirstPage: { try await loader.loadFirstPage() },
+            loadNextPage: { try await loader.loadNextPage($0) }
+        )
+
+        var iterator = stream.snapshots.makeAsyncIterator()
+        _ = await iterator.next()
+
+        let refresh = Task { await stream.refresh() }
+        _ = await iterator.next()
+        await loader.succeedFirstPage(
+            items: [.init(id: "item-1", value: "Base")],
+            nextPage: nextPage
+        )
+        await refresh.value
+        _ = try await nextSnapshot(from: &iterator)
+
+        await stream.replaceItems(
+            [.init(id: "item-1", value: "Enriched")],
+            incrementRevision: true
+        )
+
+        let replaced = try await nextSnapshot(from: &iterator)
+        XCTAssertEqual(replaced.items, [.init(id: "item-1", value: "Enriched")])
+        XCTAssertEqual(replaced.revision, 2)
+        XCTAssertEqual(replaced.pagination.nextPage, nextPage)
+        XCTAssertEqual(replaced.pagination.pagesLoaded, 1)
+        XCTAssertFalse(replaced.isRefreshing)
+        XCTAssertFalse(replaced.isLoadingNextPage)
+    }
+
     func testConcurrentRefreshesCoalesceIntoOneLoad() async throws {
         let loader = ControllableStreamPageLoader()
         let stream = WebexSnapshotStream<StreamTestItem>(
