@@ -1,7 +1,5 @@
 import Foundation
 
-public typealias SpacesStream = WebexSnapshotStream<WebexSpace>
-public typealias RoomsStream = SpacesStream
 public typealias MessagesStream = WebexSnapshotStream<WebexMessage>
 public typealias MembershipsStream = WebexSnapshotStream<WebexMembership>
 
@@ -10,7 +8,7 @@ public extension SpacesAPI {
         params: ListSpacesParams = ListSpacesParams(),
         pageLimit: Int? = nil
     ) -> SpacesStream {
-        WebexSnapshotStream(
+        let baseStream = WebexSnapshotStream(
             pageLimit: pageLimit,
             id: { $0.id },
             loadFirstPage: {
@@ -21,6 +19,27 @@ public extension SpacesAPI {
                 let page = try await list(nextPage: nextPage)
                 return WebexStreamPage(items: page.items, nextPage: page.nextPage)
             }
+        )
+        let teamsAPI = TeamsAPI(transport: transport)
+        let peopleAPI = PeopleAPI(transport: transport)
+        let membershipsAPI = MembershipsAPI(transport: transport)
+        let dependencies = WebexSpaceEnrichmentCoordinator.Dependencies(
+            getTeam: { teamID in
+                try await teamsAPI.get(teamID: teamID)
+            },
+            getSelf: {
+                try await peopleAPI.me()
+            },
+            listMemberships: { spaceID in
+                try await membershipsAPI.list(params: ListMembershipsParams(roomID: spaceID)).items
+            },
+            getPerson: { personID in
+                try await peopleAPI.get(personID: personID)
+            }
+        )
+        return SpacesStream(
+            baseStream: baseStream,
+            enricher: WebexSpaceEnrichmentCoordinator(dependencies: dependencies)
         )
     }
 }
