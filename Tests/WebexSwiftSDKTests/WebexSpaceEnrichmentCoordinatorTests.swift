@@ -94,6 +94,29 @@ final class WebexSpaceEnrichmentCoordinatorTests: XCTestCase {
         XCTAssertEqual(enriched[0].enriched.errors.first?.error, .network("callback code=[redacted]"))
     }
 
+    func testMixedApplicableSpaceWithNilTeamNameAndAvatarFailureIsPartial() async {
+        let dependencies = RecordingSpaceEnrichmentDependencies()
+        dependencies.teamByID["team-1"] = WebexTeam(id: "team-1", name: nil)
+        dependencies.selfPerson = person(id: "self", avatar: nil)
+        dependencies.membershipsByRoomID["mixed-space"] = [
+            WebexMembership(id: "m-self", roomID: "mixed-space", personID: "self"),
+            WebexMembership(id: "m-other", roomID: "mixed-space", personID: "other")
+        ]
+        dependencies.personErrorByID["other"] = .network("avatar unavailable")
+        let coordinator = WebexSpaceEnrichmentCoordinator(dependencies: dependencies.makeDependencies())
+
+        let enriched = await coordinator.enrichedItems(
+            for: [space(id: "mixed-space", type: .direct, teamID: "team-1")],
+            forceRefresh: false
+        )
+
+        XCTAssertNil(enriched[0].enriched.teamName)
+        XCTAssertNil(enriched[0].enriched.spaceAvatar)
+        XCTAssertEqual(enriched[0].enriched.status, .partial)
+        XCTAssertEqual(enriched[0].enriched.errors.count, 1)
+        XCTAssertEqual(enriched[0].enriched.errors.first?.field, .spaceAvatar)
+    }
+
     func testGroupSpaceWithoutTeamHasEmptyEnrichment() async {
         let dependencies = RecordingSpaceEnrichmentDependencies()
         let coordinator = WebexSpaceEnrichmentCoordinator(dependencies: dependencies.makeDependencies())

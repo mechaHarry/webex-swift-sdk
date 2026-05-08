@@ -144,7 +144,9 @@ actor WebexSpaceEnrichmentCoordinator {
             guard let otherPersonID else {
                 values.errors.append(WebexSpaceEnrichmentError(
                     field: .spaceAvatar,
-                    error: .network("Missing direct space participant")
+                    error: WebexStreamErrorRedactor.webexStreamError(
+                        from: WebexSDKError.network("Missing direct space participant")
+                    )
                 ))
                 return
             }
@@ -215,28 +217,16 @@ actor WebexSpaceEnrichmentCoordinator {
             return .loading
         }
 
-        let successfulFields = successfulFieldCount(values: values)
         let failedFields = values.errors.count
 
         if failedFields == 0 {
             return .complete
         }
 
-        if successfulFields > 0 {
-            return .partial
+        if failedFields == applicableFields.count {
+            return .failed
         }
 
-        return .failed
-    }
-
-    private func successfulFieldCount(values: FieldValues) -> Int {
-        var count = 0
-        if values.teamName != nil {
-            count += 1
-        }
-        if values.spaceAvatar != nil {
-            count += 1
-        }
-        return count
+        return .partial
     }
 }
