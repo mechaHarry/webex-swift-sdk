@@ -296,7 +296,7 @@ private actor SpacesStreamOperationQueue {
     }
 }
 
-private struct SpacesStreamOperation: Sendable {
+struct SpacesStreamOperation: Sendable {
     let id: UInt64
     let cancellation: SpacesStreamOperationCancellation
 }
@@ -347,7 +347,7 @@ private final class SpacesStreamOperationWaitRace: @unchecked Sendable {
     }
 }
 
-private final class SpacesStreamOperationCancellation: @unchecked Sendable {
+final class SpacesStreamOperationCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
     private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
@@ -403,7 +403,7 @@ private final class SpacesStreamOperationCancellation: @unchecked Sendable {
     }
 }
 
-private actor SpacesStreamOperationGate {
+actor SpacesStreamOperationGate {
     private var nextID: UInt64 = 0
     private var pending: [UInt64: SpacesStreamOperationCancellation] = [:]
     private var running: Set<UInt64> = []
@@ -439,6 +439,7 @@ private actor SpacesStreamOperationGate {
     func canCommitCache(_ operation: SpacesStreamOperation) -> Bool {
         pruneCancelledPending()
         return running.contains(operation.id)
+            && !operation.cancellation.isCancelled
             && !pending.keys.contains(where: { $0 > operation.id })
             && !running.contains(where: { $0 > operation.id })
     }

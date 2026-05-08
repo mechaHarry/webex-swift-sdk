@@ -158,6 +158,28 @@ final class WebexSpaceEnrichmentCoordinatorTests: XCTestCase {
         XCTAssertEqual(immediate[0].enriched.status, .complete)
     }
 
+    func testPersistedAvatarCacheHitClearsCachedSpaceAvatarError() async {
+        let dependencies = RecordingSpaceEnrichmentDependencies()
+        let coordinator = WebexSpaceEnrichmentCoordinator(dependencies: dependencies.makeDependencies())
+        let spaces = [space(id: "direct-space", type: .direct)]
+        await coordinator.seedDirectSpaceAvatarCacheForTesting(
+            spaceID: "direct-space",
+            personID: "other",
+            avatar: "https://example.com/other.png",
+            error: WebexSpaceEnrichmentError(field: .spaceAvatar, error: .network("stale missing participant"))
+        )
+
+        let enriched = await coordinator.enrichedItems(for: spaces, forceRefresh: false)
+        let immediate = await coordinator.immediateItems(for: spaces, forceRefresh: false)
+
+        XCTAssertEqual(enriched[0].enriched.spaceAvatar, "https://example.com/other.png")
+        XCTAssertEqual(enriched[0].enriched.errors, [])
+        XCTAssertEqual(immediate[0].enriched.spaceAvatar, "https://example.com/other.png")
+        XCTAssertEqual(immediate[0].enriched.errors, [])
+        XCTAssertEqual(immediate[0].enriched.status, .complete)
+        XCTAssertEqual(dependencies.personRequests, [])
+    }
+
     func testDirectSpaceAvatarFailureIsFieldScopedAndRedacted() async {
         let dependencies = RecordingSpaceEnrichmentDependencies()
         dependencies.selfPerson = person(id: "self", avatar: nil)

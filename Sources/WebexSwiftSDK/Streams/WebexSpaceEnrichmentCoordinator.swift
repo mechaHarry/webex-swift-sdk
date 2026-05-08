@@ -35,6 +35,17 @@ actor WebexSpaceEnrichmentCoordinator {
         self.dependencies = dependencies
     }
 
+    func seedDirectSpaceAvatarCacheForTesting(
+        spaceID: String,
+        personID: String,
+        avatar: String?,
+        error: WebexSpaceEnrichmentError
+    ) {
+        otherPersonIDBySpaceID[spaceID] = .personID(personID)
+        avatarByPersonID[personID] = avatar
+        spaceAvatarErrorBySpaceID[spaceID] = error
+    }
+
     func immediateItems(
         for spaces: [WebexSpace],
         forceRefresh: Bool
@@ -218,6 +229,9 @@ actor WebexSpaceEnrichmentCoordinator {
             }
 
             if !forceRefresh, let cached = avatarByPersonID[otherPersonID] {
+                if await shouldCommitCache() {
+                    spaceAvatarErrorBySpaceID[spaceID] = nil
+                }
                 values.spaceAvatar = cached
                 return
             }

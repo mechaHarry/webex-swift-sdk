@@ -2,6 +2,18 @@ import XCTest
 @testable import WebexSwiftSDK
 
 final class SpacesStreamTests: XCTestCase {
+    func testCancelledRunningOperationCannotCommitEnrichmentCache() async {
+        let gate = SpacesStreamOperationGate()
+        let operation = await gate.reserve()
+
+        let didStart = await gate.start(operation)
+        operation.cancellation.cancel()
+
+        XCTAssertTrue(didStart)
+        let canCommitCache = await gate.canCommitCache(operation)
+        XCTAssertFalse(canCommitCache)
+    }
+
     func testRefreshEmitsLoadingThenResolvedEnrichment() async throws {
         let loader = ControllableSpacesPageLoader()
         let dependencies = RecordingSpacesStreamDependencies()
@@ -473,6 +485,52 @@ final class SpacesStreamTests: XCTestCase {
         let restored = await stream.currentSnapshot()
         XCTAssertEqual(restored.items, oldEnriched.items)
         XCTAssertNil(restored.lastError)
+    }
+
+    func testCancelledRefreshEnrichmentDoesNotUpdateEnrichmentCache() async throws {
+        let loader = ControllableSpacesPageLoader()
+        let dependencies = PausingSpacesStreamDependencies()
+        await dependencies.setTeam(WebexTeam(id: "team-1", name: "Old"))
+        let stream = SpacesStream(
+            baseStream: WebexSnapshotStream<WebexSpace>(
+                id: { $0.id },
+                loadFirstPage: { try await loader.loadFirstPage() },
+                loadNextPage: { try await loader.loadNextPage($0) }
+            ),
+            enricher: WebexSpaceEnrichmentCoordinator(dependencies: dependencies.makeDependencies())
+        )
+
+        let initialRefresh = Task { await stream.refresh() }
+        let didStartInitialRefresh = await loader.waitForFirstPageCallCount(1)
+        XCTAssertTrue(didStartInitialRefresh)
+        await loader.succeedFirstPage(items: [
+            WebexSpace(id: "space-1", title: "Old Space", type: .group, teamID: "team-1")
+        ])
+        await initialRefresh.value
+
+        await dependencies.setTeam(WebexTeam(id: "team-1", name: "Canceled"))
+        await dependencies.pauseTeam("team-1")
+        let enrichmentRefresh = Task { await stream.refreshEnrichment() }
+        await dependencies.waitForPausedTeamRequest("team-1")
+
+        enrichmentRefresh.cancel()
+        await dependencies.resumeTeam("team-1")
+        await enrichmentRefresh.value
+
+        await dependencies.setTeam(WebexTeam(id: "team-1", name: "Fresh"))
+        let ordinaryRefresh = Task { await stream.refresh() }
+        let didStartOrdinaryRefresh = await loader.waitForFirstPageCallCount(2)
+        XCTAssertTrue(didStartOrdinaryRefresh)
+        await loader.succeedFirstPage(items: [
+            WebexSpace(id: "space-2", title: "Ordinary Space", type: .group, teamID: "team-1")
+        ])
+        await ordinaryRefresh.value
+
+        let snapshot = await stream.currentSnapshot()
+        XCTAssertEqual(snapshot.items.map(\.id), ["space-2"])
+        XCTAssertEqual(snapshot.items.first?.enriched.teamName, "Old")
+        let teamRequests = await dependencies.teamRequestsValue()
+        XCTAssertEqual(teamRequests, ["team-1", "team-1"])
     }
 }
 
