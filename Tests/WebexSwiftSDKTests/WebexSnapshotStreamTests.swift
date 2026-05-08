@@ -313,6 +313,29 @@ final class WebexSnapshotStreamTests: XCTestCase {
         let firstPageCallCount = await loader.firstPageCallCount
         XCTAssertEqual(firstPageCallCount, 0)
     }
+
+    func testSnapshotsDoesNotRetainRapidlyCancelledSubscriptions() async throws {
+        let loader = ControllableStreamPageLoader()
+        let stream = WebexSnapshotStream<StreamTestItem>(
+            id: { $0.id },
+            loadFirstPage: { try await loader.loadFirstPage() },
+            loadNextPage: { try await loader.loadNextPage($0) }
+        )
+
+        for _ in 0..<200 {
+            let snapshots = stream.snapshots
+            var iterator: AsyncStream<WebexStreamSnapshot<StreamTestItem>>.Iterator? = snapshots.makeAsyncIterator()
+            _ = iterator
+            iterator = nil
+        }
+
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+
+        let subscriberCount = await stream.subscriberCount()
+        XCTAssertEqual(subscriberCount, 0)
+    }
 }
 
 private struct StreamTestItem: Equatable, Sendable {

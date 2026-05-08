@@ -22,17 +22,29 @@ public final class SpacesStream: @unchecked Sendable {
     }
 
     public func refresh() async {
+        let generationID = await generation.next()
         await baseStream.refresh()
-        await runEnrichment(forceRefresh: false)
+        let snapshot = await baseStream.currentSnapshot()
+        guard snapshot.lastError == nil else {
+            return
+        }
+        await runEnrichment(forceRefresh: false, generationID: generationID, snapshot: snapshot)
     }
 
     public func loadNextPage() async {
+        let generationID = await generation.next()
         await baseStream.loadNextPage()
-        await runEnrichment(forceRefresh: false)
+        let snapshot = await baseStream.currentSnapshot()
+        guard snapshot.lastError == nil else {
+            return
+        }
+        await runEnrichment(forceRefresh: false, generationID: generationID, snapshot: snapshot)
     }
 
     public func refreshEnrichment() async {
-        await runEnrichment(forceRefresh: true)
+        let generationID = await generation.next()
+        let snapshot = await baseStream.currentSnapshot()
+        await runEnrichment(forceRefresh: true, generationID: generationID, snapshot: snapshot)
     }
 
     public func refreshOnTriggers(
@@ -58,9 +70,11 @@ public final class SpacesStream: @unchecked Sendable {
         }
     }
 
-    private func runEnrichment(forceRefresh: Bool) async {
-        let generationID = await generation.next()
-        let snapshot = await baseStream.currentSnapshot()
+    private func runEnrichment(
+        forceRefresh: Bool,
+        generationID: UInt64,
+        snapshot: WebexStreamSnapshot<WebexSpace>
+    ) async {
         let loadingItems = await enricher.immediateItems(
             for: snapshot.items,
             forceRefresh: forceRefresh

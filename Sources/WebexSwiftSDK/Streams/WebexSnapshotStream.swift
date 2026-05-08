@@ -71,10 +71,11 @@ public final class WebexSnapshotStream<Item: Sendable>: @unchecked Sendable {
         let state = state
         return AsyncStream { continuation in
             let id = UUID()
-            Task {
+            let subscribeTask = Task {
                 await state.subscribe(id: id, continuation: continuation)
             }
             continuation.onTermination = { @Sendable _ in
+                subscribeTask.cancel()
                 Task {
                     await state.unsubscribe(id: id)
                 }
@@ -117,6 +118,10 @@ public final class WebexSnapshotStream<Item: Sendable>: @unchecked Sendable {
         await state.replaceItems(items, incrementRevision: incrementRevision)
     }
 
+    func subscriberCount() async -> Int {
+        await state.subscriberCount()
+    }
+
     public func refreshOnTriggers(
         _ triggers: AsyncStream<WebexStreamTrigger>,
         where shouldRefresh: @escaping @Sendable (WebexStreamTrigger) -> Bool = { _ in true }
@@ -149,6 +154,7 @@ private actor WebexSnapshotStreamState<Item: Sendable> {
     private let loadNextPage: @Sendable (WebexPageLink) async throws -> WebexStreamPage<Item>
 
     private var continuations: [UUID: AsyncStream<WebexStreamSnapshot<Item>>.Continuation] = [:]
+    private var terminatedSubscriptionIDs: Set<UUID> = []
     private var items: [Item] = []
     private var revision: UInt64 = 0
     private var lastUpdatedAt: Date?
@@ -176,16 +182,26 @@ private actor WebexSnapshotStreamState<Item: Sendable> {
         id: UUID,
         continuation: AsyncStream<WebexStreamSnapshot<Item>>.Continuation
     ) {
+        guard terminatedSubscriptionIDs.remove(id) == nil else {
+            return
+        }
+
         continuations[id] = continuation
         continuation.yield(makeSnapshot())
     }
 
     func unsubscribe(id: UUID) {
-        continuations[id] = nil
+        if continuations.removeValue(forKey: id) == nil {
+            terminatedSubscriptionIDs.insert(id)
+        }
     }
 
     func currentSnapshot() -> WebexStreamSnapshot<Item> {
         makeSnapshot()
+    }
+
+    func subscriberCount() -> Int {
+        continuations.count
     }
 
     func refresh() async {

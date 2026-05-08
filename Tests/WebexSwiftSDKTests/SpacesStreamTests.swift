@@ -63,11 +63,8 @@ final class SpacesStreamTests: XCTestCase {
             WebexSpace(id: "space-1", title: "General", type: .group, teamID: "team-1")
         ])
 
-        while true {
-            let snapshot = try await nextSnapshot(from: &iterator)
-            if snapshot.items.first?.enriched.teamName == "Old" {
-                break
-            }
+        _ = try await nextSnapshot(from: &iterator) { snapshot in
+            snapshot.items.first?.enriched.teamName == "Old"
         }
         await refresh.value
 
@@ -83,6 +80,82 @@ final class SpacesStreamTests: XCTestCase {
         XCTAssertEqual(firstPageCallCount, 1)
         XCTAssertEqual(dependencies.teamRequests, ["team-1", "team-1"])
     }
+
+    func testFailedRefreshDoesNotCallEnrichmentDependencies() async throws {
+        let loader = ControllableSpacesPageLoader()
+        let dependencies = RecordingSpacesStreamDependencies()
+        let baseStream = WebexSnapshotStream<WebexSpace>(
+            id: { $0.id },
+            loadFirstPage: { try await loader.loadFirstPage() },
+            loadNextPage: { try await loader.loadNextPage($0) }
+        )
+        await baseStream.replaceItems([
+            WebexSpace(id: "space-1", title: "General", type: .group, teamID: "team-1")
+        ])
+        let stream = SpacesStream(
+            baseStream: baseStream,
+            enricher: WebexSpaceEnrichmentCoordinator(dependencies: dependencies.makeDependencies())
+        )
+
+        let refresh = Task { await stream.refresh() }
+        await loader.waitForFirstPageCallCount(1)
+        await loader.failFirstPage(WebexSDKError.network("rooms unavailable"))
+        await refresh.value
+
+        XCTAssertEqual(dependencies.teamRequests, [])
+    }
+
+    func testRefreshEnrichmentStartedBeforeBaseRefreshCannotOverwriteInFlightRefresh() async throws {
+        let loader = ControllableSpacesPageLoader()
+        let dependencies = PausingSpacesStreamDependencies()
+        await dependencies.setTeam(WebexTeam(id: "team-1", name: "Old"))
+        await dependencies.setTeam(WebexTeam(id: "team-2", name: "New"))
+        let stream = SpacesStream(
+            baseStream: WebexSnapshotStream<WebexSpace>(
+                id: { $0.id },
+                loadFirstPage: { try await loader.loadFirstPage() },
+                loadNextPage: { try await loader.loadNextPage($0) }
+            ),
+            enricher: WebexSpaceEnrichmentCoordinator(dependencies: dependencies.makeDependencies())
+        )
+
+        var iterator = stream.snapshots.makeAsyncIterator()
+        _ = try await nextSnapshot(from: &iterator)
+
+        let initialRefresh = Task { await stream.refresh() }
+        _ = try await nextSnapshot(from: &iterator)
+        await loader.succeedFirstPage(items: [
+            WebexSpace(id: "space-1", title: "Old Space", type: .group, teamID: "team-1")
+        ])
+        _ = try await nextSnapshot(from: &iterator) { snapshot in
+            snapshot.items.first?.enriched.teamName == "Old"
+        }
+        await initialRefresh.value
+
+        await dependencies.pauseTeam("team-1")
+        let staleEnrichment = Task { await stream.refreshEnrichment() }
+        _ = try await nextSnapshot(from: &iterator) { snapshot in
+            snapshot.items.first?.enriched.status == .loading
+        }
+        await dependencies.waitForPausedTeamRequest("team-1")
+
+        let baseRefresh = Task { await stream.refresh() }
+        _ = try await nextSnapshot(from: &iterator) { $0.isRefreshing }
+        await dependencies.resumeTeam("team-1")
+        await staleEnrichment.value
+
+        let inFlightSnapshot = await stream.currentSnapshot()
+        XCTAssertNotEqual(inFlightSnapshot.items.first?.enriched.teamName, "Old")
+
+        await loader.succeedFirstPage(items: [
+            WebexSpace(id: "space-2", title: "New Space", type: .group, teamID: "team-2")
+        ])
+        await baseRefresh.value
+
+        let refreshed = await stream.currentSnapshot()
+        XCTAssertEqual(refreshed.items.map(\.id), ["space-2"])
+        XCTAssertEqual(refreshed.items.first?.enriched.teamName, "New")
+    }
 }
 
 private func nextSnapshot(
@@ -90,6 +163,21 @@ private func nextSnapshot(
 ) async throws -> WebexStreamSnapshot<WebexSpace> {
     let snapshot = await iterator.next()
     return try XCTUnwrap(snapshot)
+}
+
+private func nextSnapshot(
+    from iterator: inout AsyncStream<WebexStreamSnapshot<WebexSpace>>.Iterator,
+    matching predicate: (WebexStreamSnapshot<WebexSpace>) -> Bool
+) async throws -> WebexStreamSnapshot<WebexSpace> {
+    for _ in 0..<10 {
+        let snapshot = try await nextSnapshot(from: &iterator)
+        if predicate(snapshot) {
+            return snapshot
+        }
+    }
+
+    XCTFail("Timed out waiting for matching spaces stream snapshot")
+    return try await nextSnapshot(from: &iterator)
 }
 
 private actor ControllableSpacesPageLoader {
@@ -114,8 +202,80 @@ private actor ControllableSpacesPageLoader {
         ))
     }
 
+    func failFirstPage(_ error: Error) {
+        firstPageContinuations.removeFirst().resume(throwing: error)
+    }
+
     func firstPageCallCountValue() -> Int {
         firstPageCallCount
+    }
+
+    func waitForFirstPageCallCount(_ expectedCount: Int) async {
+        while firstPageCallCount < expectedCount {
+            await Task.yield()
+        }
+    }
+}
+
+private actor PausingSpacesStreamDependencies {
+    private var teamByID: [String: WebexTeam] = [:]
+    private var pausedTeamIDs: Set<String> = []
+    private var pausedTeamContinuations: [String: [CheckedContinuation<Void, Never>]] = [:]
+    private var waitersByTeamID: [String: [CheckedContinuation<Void, Never>]] = [:]
+
+    func setTeam(_ team: WebexTeam) {
+        teamByID[team.id] = team
+    }
+
+    func pauseTeam(_ teamID: String) {
+        pausedTeamIDs.insert(teamID)
+    }
+
+    func resumeTeam(_ teamID: String) {
+        pausedTeamIDs.remove(teamID)
+        let continuations = pausedTeamContinuations.removeValue(forKey: teamID) ?? []
+        for continuation in continuations {
+            continuation.resume()
+        }
+    }
+
+    func waitForPausedTeamRequest(_ teamID: String) async {
+        if pausedTeamContinuations[teamID]?.isEmpty == false {
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waitersByTeamID[teamID, default: []].append(continuation)
+        }
+    }
+
+    nonisolated func makeDependencies() -> WebexSpaceEnrichmentCoordinator.Dependencies {
+        WebexSpaceEnrichmentCoordinator.Dependencies(
+            getTeam: { [self] teamID in
+                await team(teamID)
+            },
+            getSelf: {
+                WebexPerson(id: "self", emails: ["self@example.com"])
+            },
+            listMemberships: { _ in [] },
+            getPerson: { personID in
+                WebexPerson(id: personID, emails: ["\(personID)@example.com"])
+            }
+        )
+    }
+
+    private func team(_ teamID: String) async -> WebexTeam {
+        if pausedTeamIDs.contains(teamID) {
+            await withCheckedContinuation { continuation in
+                pausedTeamContinuations[teamID, default: []].append(continuation)
+                let waiters = waitersByTeamID.removeValue(forKey: teamID) ?? []
+                for waiter in waiters {
+                    waiter.resume()
+                }
+            }
+        }
+
+        return teamByID[teamID] ?? WebexTeam(id: teamID)
     }
 }
 
