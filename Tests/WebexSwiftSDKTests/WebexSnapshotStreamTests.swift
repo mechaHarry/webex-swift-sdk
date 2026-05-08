@@ -335,6 +335,8 @@ final class WebexSnapshotStreamTests: XCTestCase {
 
         let subscriberCount = await stream.subscriberCount()
         XCTAssertEqual(subscriberCount, 0)
+        let tombstoneCount = await stream.subscriptionTombstoneCount()
+        XCTAssertEqual(tombstoneCount, 0)
     }
 }
 

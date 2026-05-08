@@ -106,6 +106,42 @@ final class SpacesStreamTests: XCTestCase {
         XCTAssertEqual(dependencies.teamRequests, [])
     }
 
+    func testRepeatedRefreshReusesCachedTeamName() async throws {
+        let loader = ControllableSpacesPageLoader()
+        let dependencies = RecordingSpacesStreamDependencies()
+        dependencies.teamByID["team-1"] = WebexTeam(id: "team-1", name: "Old")
+        let stream = SpacesStream(
+            baseStream: WebexSnapshotStream<WebexSpace>(
+                id: { $0.id },
+                loadFirstPage: { try await loader.loadFirstPage() },
+                loadNextPage: { try await loader.loadNextPage($0) }
+            ),
+            enricher: WebexSpaceEnrichmentCoordinator(dependencies: dependencies.makeDependencies())
+        )
+
+        let firstRefresh = Task { await stream.refresh() }
+        let didStartFirstRefresh = await loader.waitForFirstPageCallCount(1)
+        XCTAssertTrue(didStartFirstRefresh)
+        await loader.succeedFirstPage(items: [
+            WebexSpace(id: "space-1", title: "First Space", type: .group, teamID: "team-1")
+        ])
+        await firstRefresh.value
+
+        dependencies.teamByID["team-1"] = WebexTeam(id: "team-1", name: "New")
+        let secondRefresh = Task { await stream.refresh() }
+        let didStartSecondRefresh = await loader.waitForFirstPageCallCount(2)
+        XCTAssertTrue(didStartSecondRefresh)
+        await loader.succeedFirstPage(items: [
+            WebexSpace(id: "space-2", title: "Second Space", type: .group, teamID: "team-1")
+        ])
+        await secondRefresh.value
+
+        let snapshot = await stream.currentSnapshot()
+        XCTAssertEqual(snapshot.items.map(\.id), ["space-2"])
+        XCTAssertEqual(snapshot.items.first?.enriched.teamName, "Old")
+        XCTAssertEqual(dependencies.teamRequests, ["team-1"])
+    }
+
     func testRefreshEnrichmentStartedBeforeBaseRefreshCannotOverwriteInFlightRefresh() async throws {
         let loader = ControllableSpacesPageLoader()
         let dependencies = PausingSpacesStreamDependencies()
@@ -248,9 +284,9 @@ final class SpacesStreamTests: XCTestCase {
 
         let snapshot = await stream.currentSnapshot()
         XCTAssertEqual(snapshot.items.map(\.id), ["space-2"])
-        XCTAssertEqual(snapshot.items.first?.enriched.teamName, "Fresh")
+        XCTAssertEqual(snapshot.items.first?.enriched.teamName, "Old")
         let teamRequests = await dependencies.teamRequestsValue()
-        XCTAssertEqual(teamRequests, ["team-1", "team-1", "team-1"])
+        XCTAssertEqual(teamRequests, ["team-1", "team-1"])
 
         await dependencies.setTeam(WebexTeam(id: "team-1", name: "Fresh Again"))
         let nextPage = Task { await stream.loadNextPage() }
@@ -267,9 +303,9 @@ final class SpacesStreamTests: XCTestCase {
 
         let cachedSnapshot = await stream.currentSnapshot()
         XCTAssertEqual(cachedSnapshot.items.map(\.id), ["space-2", "space-3"])
-        XCTAssertEqual(cachedSnapshot.items.map(\.enriched.teamName), ["Fresh", "Fresh"])
+        XCTAssertEqual(cachedSnapshot.items.map(\.enriched.teamName), ["Old", "Old"])
         let finalTeamRequests = await dependencies.teamRequestsValue()
-        XCTAssertEqual(finalTeamRequests, ["team-1", "team-1", "team-1"])
+        XCTAssertEqual(finalTeamRequests, ["team-1", "team-1"])
     }
 
     func testCancelledQueuedRefreshDoesNotRunBaseLoadOrEnrichment() async throws {
@@ -311,6 +347,8 @@ final class SpacesStreamTests: XCTestCase {
         XCTAssertEqual(firstPageCallCount, 1)
         let teamRequests = await dependencies.teamRequestsValue()
         XCTAssertEqual(teamRequests, ["team-1", "team-1"])
+        let snapshot = await stream.currentSnapshot()
+        XCTAssertEqual(snapshot.items.first?.enriched.teamName, "Old")
         queuedRefresh.cancel()
     }
 }
@@ -386,21 +424,21 @@ private actor ControllableSpacesPageLoader {
     }
 
     func waitForFirstPageCallCount(_ expectedCount: Int) async -> Bool {
-        for _ in 0..<100 {
+        for _ in 0..<1_000 {
             if firstPageCallCount >= expectedCount {
                 return true
             }
-            await Task.yield()
+            try? await Task.sleep(nanoseconds: 1_000_000)
         }
         return firstPageCallCount >= expectedCount
     }
 
     func waitForNextPageCallCount(_ expectedCount: Int) async -> Bool {
-        for _ in 0..<100 {
+        for _ in 0..<1_000 {
             if nextPageCallCount >= expectedCount {
                 return true
             }
-            await Task.yield()
+            try? await Task.sleep(nanoseconds: 1_000_000)
         }
         return nextPageCallCount >= expectedCount
     }

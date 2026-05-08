@@ -77,7 +77,9 @@ public final class WebexSnapshotStream<Item: Sendable>: @unchecked Sendable {
             continuation.onTermination = { @Sendable _ in
                 subscribeTask.cancel()
                 Task {
+                    await subscribeTask.value
                     await state.unsubscribe(id: id)
+                    await state.cancelPendingSubscribe(id: id)
                 }
             }
         }
@@ -120,6 +122,10 @@ public final class WebexSnapshotStream<Item: Sendable>: @unchecked Sendable {
 
     func subscriberCount() async -> Int {
         await state.subscriberCount()
+    }
+
+    func subscriptionTombstoneCount() async -> Int {
+        await state.subscriptionTombstoneCount()
     }
 
     public func refreshOnTriggers(
@@ -196,12 +202,20 @@ private actor WebexSnapshotStreamState<Item: Sendable> {
         }
     }
 
+    func cancelPendingSubscribe(id: UUID) {
+        terminatedSubscriptionIDs.remove(id)
+    }
+
     func currentSnapshot() -> WebexStreamSnapshot<Item> {
         makeSnapshot()
     }
 
     func subscriberCount() -> Int {
         continuations.count
+    }
+
+    func subscriptionTombstoneCount() -> Int {
+        terminatedSubscriptionIDs.count
     }
 
     func refresh() async {

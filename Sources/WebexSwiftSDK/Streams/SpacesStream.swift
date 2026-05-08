@@ -3,7 +3,7 @@ import Foundation
 public final class SpacesStream: @unchecked Sendable {
     private let baseStream: WebexSnapshotStream<WebexSpace>
     private let enricher: WebexSpaceEnrichmentCoordinator
-    private let generation = SpacesStreamGeneration()
+    private let operationGate = SpacesStreamOperationGate()
     private let operationQueue = SpacesStreamOperationQueue()
 
     public var snapshots: AsyncStream<WebexStreamSnapshot<WebexSpace>> {
@@ -27,14 +27,25 @@ public final class SpacesStream: @unchecked Sendable {
             return
         }
 
-        let generationID = await generation.next()
-        await operationQueue.run { [self] in
+        let operation = await operationGate.reserve()
+        await operationQueue.run(
+            cancellation: operation.cancellation,
+            onStart: { [operationGate] in
+                await operationGate.start(operation)
+            },
+            onCancel: { [operationGate] in
+                await operationGate.cancel(operation)
+            },
+            onFinish: { [operationGate] in
+                await operationGate.finish(operation)
+            }
+        ) { [self] in
             await baseStream.refresh()
             let snapshot = await baseStream.currentSnapshot()
             guard snapshot.lastError == nil else {
                 return
             }
-            await runEnrichment(forceRefresh: true, generationID: generationID, snapshot: snapshot)
+            await runEnrichment(forceRefresh: false, operation: operation, snapshot: snapshot)
         }
     }
 
@@ -43,14 +54,25 @@ public final class SpacesStream: @unchecked Sendable {
             return
         }
 
-        let generationID = await generation.next()
-        await operationQueue.run { [self] in
+        let operation = await operationGate.reserve()
+        await operationQueue.run(
+            cancellation: operation.cancellation,
+            onStart: { [operationGate] in
+                await operationGate.start(operation)
+            },
+            onCancel: { [operationGate] in
+                await operationGate.cancel(operation)
+            },
+            onFinish: { [operationGate] in
+                await operationGate.finish(operation)
+            }
+        ) { [self] in
             await baseStream.loadNextPage()
             let snapshot = await baseStream.currentSnapshot()
             guard snapshot.lastError == nil else {
                 return
             }
-            await runEnrichment(forceRefresh: false, generationID: generationID, snapshot: snapshot)
+            await runEnrichment(forceRefresh: false, operation: operation, snapshot: snapshot)
         }
     }
 
@@ -59,10 +81,21 @@ public final class SpacesStream: @unchecked Sendable {
             return
         }
 
-        let generationID = await generation.next()
-        await operationQueue.run { [self] in
+        let operation = await operationGate.reserve()
+        await operationQueue.run(
+            cancellation: operation.cancellation,
+            onStart: { [operationGate] in
+                await operationGate.start(operation)
+            },
+            onCancel: { [operationGate] in
+                await operationGate.cancel(operation)
+            },
+            onFinish: { [operationGate] in
+                await operationGate.finish(operation)
+            }
+        ) { [self] in
             let snapshot = await baseStream.currentSnapshot()
-            await runEnrichment(forceRefresh: true, generationID: generationID, snapshot: snapshot)
+            await runEnrichment(forceRefresh: true, operation: operation, snapshot: snapshot)
         }
     }
 
@@ -91,7 +124,7 @@ public final class SpacesStream: @unchecked Sendable {
 
     private func runEnrichment(
         forceRefresh: Bool,
-        generationID: UInt64,
+        operation: SpacesStreamOperation,
         snapshot: WebexStreamSnapshot<WebexSpace>
     ) async {
         guard !Task.isCancelled else {
@@ -102,7 +135,7 @@ public final class SpacesStream: @unchecked Sendable {
             for: snapshot.items,
             forceRefresh: forceRefresh
         )
-        guard await generation.isCurrent(generationID) else {
+        guard await operationGate.canCommit(operation) else {
             return
         }
         await baseStream.replaceItems(loadingItems, incrementRevision: false)
@@ -114,11 +147,11 @@ public final class SpacesStream: @unchecked Sendable {
         let enrichedItems = await enricher.enrichedItems(
             for: snapshot.items,
             forceRefresh: forceRefresh,
-            shouldCommitCache: { [generation] in
-                await generation.isCurrent(generationID)
+            shouldCommitCache: { [operationGate] in
+                await operationGate.canCommit(operation)
             }
         )
-        guard await generation.isCurrent(generationID) else {
+        guard await operationGate.canCommit(operation) else {
             return
         }
         if enrichedItems != loadingItems {
@@ -131,20 +164,28 @@ private actor SpacesStreamOperationQueue {
     private var tail: Task<Void, Never>?
     private var tailID: UInt64 = 0
 
-    func run(_ operation: @escaping @Sendable () async -> Void) async {
+    func run(
+        cancellation: SpacesStreamOperationCancellation,
+        onStart: @escaping @Sendable () async -> Bool,
+        onCancel: @escaping @Sendable () async -> Void,
+        onFinish: @escaping @Sendable () async -> Void,
+        operation: @escaping @Sendable () async -> Void
+    ) async {
         guard !Task.isCancelled else {
+            await onCancel()
             return
         }
 
-        let queuedOperation = SpacesStreamQueuedOperation()
         let previous = tail
         tailID += 1
         let operationID = tailID
         let task = Task {
             await previous?.value
-            let operationCancelled = await queuedOperation.isCancelled
             guard !Task.isCancelled,
-                  !operationCancelled else {
+                  !cancellation.isCancelled else {
+                return
+            }
+            guard await onStart() else {
                 return
             }
             await operation()
@@ -153,16 +194,29 @@ private actor SpacesStreamOperationQueue {
 
         if Task.isCancelled {
             task.cancel()
-            await queuedOperation.cancel()
+            cancellation.cancel()
+            await onCancel()
         }
 
         await withTaskCancellationHandler {
             await task.value
         } onCancel: {
+            cancellation.cancel()
             task.cancel()
             Task {
-                await queuedOperation.cancel()
+                await onCancel()
             }
+        }
+
+        if Task.isCancelled {
+            cancellation.cancel()
+            await onCancel()
+        }
+
+        if cancellation.isCancelled {
+            await onCancel()
+        } else {
+            await onFinish()
         }
 
         if tailID == operationID {
@@ -171,28 +225,72 @@ private actor SpacesStreamOperationQueue {
     }
 }
 
-private actor SpacesStreamQueuedOperation {
+private struct SpacesStreamOperation: Sendable {
+    let id: UInt64
+    let cancellation: SpacesStreamOperationCancellation
+}
+
+private final class SpacesStreamOperationCancellation: @unchecked Sendable {
+    private let lock = NSLock()
     private var cancelled = false
 
     var isCancelled: Bool {
-        cancelled
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
     }
 
     func cancel() {
+        lock.lock()
+        defer { lock.unlock() }
         cancelled = true
     }
 }
 
-private actor SpacesStreamGeneration {
-    private var current: UInt64 = 0
+private actor SpacesStreamOperationGate {
+    private var nextID: UInt64 = 0
+    private var pending: [UInt64: SpacesStreamOperationCancellation] = [:]
+    private var running: Set<UInt64> = []
 
-    func next() -> UInt64 {
-        current += 1
-        return current
+    func reserve() -> SpacesStreamOperation {
+        nextID += 1
+        let cancellation = SpacesStreamOperationCancellation()
+        pending[nextID] = cancellation
+        return SpacesStreamOperation(id: nextID, cancellation: cancellation)
     }
 
-    func isCurrent(_ generationID: UInt64) -> Bool {
-        generationID == current
+    func start(_ operation: SpacesStreamOperation) -> Bool {
+        pruneCancelledPending()
+        guard pending.removeValue(forKey: operation.id) != nil,
+              !operation.cancellation.isCancelled else {
+            return false
+        }
+        running.insert(operation.id)
+        return true
+    }
+
+    func cancel(_ operation: SpacesStreamOperation) {
+        operation.cancellation.cancel()
+        pending.removeValue(forKey: operation.id)
+        running.remove(operation.id)
+    }
+
+    func finish(_ operation: SpacesStreamOperation) {
+        pending.removeValue(forKey: operation.id)
+        running.remove(operation.id)
+    }
+
+    func canCommit(_ operation: SpacesStreamOperation) -> Bool {
+        pruneCancelledPending()
+        return running.contains(operation.id)
+            && !pending.keys.contains(where: { $0 > operation.id })
+            && !running.contains(where: { $0 > operation.id })
+    }
+
+    private func pruneCancelledPending() {
+        pending = pending.filter { _, cancellation in
+            !cancellation.isCancelled
+        }
     }
 }
 
