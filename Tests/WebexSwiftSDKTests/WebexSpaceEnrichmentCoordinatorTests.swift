@@ -50,6 +50,21 @@ final class WebexSpaceEnrichmentCoordinatorTests: XCTestCase {
         XCTAssertEqual(dependencies.teamRequests, ["team-1", "team-1"])
     }
 
+    func testForceRefreshDeduplicatesRepeatedTeamIDsWithinSnapshot() async {
+        let dependencies = RecordingSpaceEnrichmentDependencies()
+        dependencies.teamByID["team-1"] = WebexTeam(id: "team-1", name: "Platform")
+        let coordinator = WebexSpaceEnrichmentCoordinator(dependencies: dependencies.makeDependencies())
+        let spaces = [
+            space(id: "team-space-1", type: .group, teamID: "team-1"),
+            space(id: "team-space-2", type: .group, teamID: "team-1")
+        ]
+
+        let enriched = await coordinator.enrichedItems(for: spaces, forceRefresh: true)
+
+        XCTAssertEqual(enriched.map(\.enriched.teamName), ["Platform", "Platform"])
+        XCTAssertEqual(dependencies.teamRequests, ["team-1"])
+    }
+
     func testDirectSpaceAvatarUsesOtherPersonAvatar() async {
         let dependencies = RecordingSpaceEnrichmentDependencies()
         dependencies.selfPerson = person(id: "self", avatar: "https://example.com/self.png")
@@ -69,6 +84,37 @@ final class WebexSpaceEnrichmentCoordinatorTests: XCTestCase {
         XCTAssertEqual(enriched[0].enriched.status, .complete)
         XCTAssertEqual(dependencies.meRequests, 1)
         XCTAssertEqual(dependencies.membershipRequests, ["direct-space"])
+        XCTAssertEqual(dependencies.personRequests, ["other"])
+    }
+
+    func testForceRefreshDeduplicatesRepeatedDirectPersonLookupsWithinSnapshot() async {
+        let dependencies = RecordingSpaceEnrichmentDependencies()
+        dependencies.selfPerson = person(id: "self", avatar: nil)
+        dependencies.membershipsByRoomID["direct-1"] = [
+            WebexMembership(id: "m-self-1", roomID: "direct-1", personID: "self"),
+            WebexMembership(id: "m-other-1", roomID: "direct-1", personID: "other")
+        ]
+        dependencies.membershipsByRoomID["direct-2"] = [
+            WebexMembership(id: "m-self-2", roomID: "direct-2", personID: "self"),
+            WebexMembership(id: "m-other-2", roomID: "direct-2", personID: "other")
+        ]
+        dependencies.personByID["other"] = person(id: "other", avatar: "https://example.com/other.png")
+        let coordinator = WebexSpaceEnrichmentCoordinator(dependencies: dependencies.makeDependencies())
+
+        let enriched = await coordinator.enrichedItems(
+            for: [
+                space(id: "direct-1", type: .direct),
+                space(id: "direct-2", type: .direct)
+            ],
+            forceRefresh: true
+        )
+
+        XCTAssertEqual(
+            enriched.map(\.enriched.spaceAvatar),
+            ["https://example.com/other.png", "https://example.com/other.png"]
+        )
+        XCTAssertEqual(dependencies.meRequests, 1)
+        XCTAssertEqual(dependencies.membershipRequests, ["direct-1", "direct-2"])
         XCTAssertEqual(dependencies.personRequests, ["other"])
     }
 

@@ -198,6 +198,7 @@ private actor SpacesStreamOperationQueue {
         let previous = tail
         tailID += 1
         let operationID = tailID
+        let execution = SpacesStreamQueuedExecution()
         let task = Task {
             await previous?.value
             guard !Task.isCancelled,
@@ -207,6 +208,7 @@ private actor SpacesStreamOperationQueue {
             guard await onStart() else {
                 return
             }
+            await execution.markStarted()
             await operation()
         }
         tail = task
@@ -217,8 +219,12 @@ private actor SpacesStreamOperationQueue {
             await onCancel()
         }
 
-        await withTaskCancellationHandler {
-            await task.value
+        let completed = await withTaskCancellationHandler {
+            await waitForCompletionOrQueuedCancellation(
+                task: task,
+                cancellation: cancellation,
+                execution: execution
+            )
         } onCancel: {
             cancellation.cancel()
             task.cancel()
@@ -239,8 +245,33 @@ private actor SpacesStreamOperationQueue {
         }
 
         if tailID == operationID {
-            tail = nil
+            tail = completed ? nil : previous
         }
+    }
+
+    private func waitForCompletionOrQueuedCancellation(
+        task: Task<Void, Never>,
+        cancellation: SpacesStreamOperationCancellation,
+        execution: SpacesStreamQueuedExecution
+    ) async -> Bool {
+        let race = SpacesStreamOperationWaitRace()
+        let completionWaiter = Task {
+            await task.value
+            race.complete(with: true)
+        }
+        let cancellationWaiter = Task {
+            await cancellation.waitUntilCancelled()
+            if await execution.hasStarted {
+                await task.value
+                race.complete(with: true)
+            } else {
+                race.complete(with: false)
+            }
+        }
+        let completed = await race.wait()
+        completionWaiter.cancel()
+        cancellationWaiter.cancel()
+        return completed
     }
 }
 
@@ -249,9 +280,56 @@ private struct SpacesStreamOperation: Sendable {
     let cancellation: SpacesStreamOperationCancellation
 }
 
+private actor SpacesStreamQueuedExecution {
+    private var started = false
+
+    var hasStarted: Bool {
+        started
+    }
+
+    func markStarted() {
+        started = true
+    }
+}
+
+private final class SpacesStreamOperationWaitRace: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Bool?
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    func wait() async -> Bool {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if let result {
+                lock.unlock()
+                continuation.resume(returning: result)
+            } else {
+                self.continuation = continuation
+                lock.unlock()
+            }
+        }
+    }
+
+    func complete(with result: Bool) {
+        let continuation: CheckedContinuation<Bool, Never>?
+        lock.lock()
+        guard self.result == nil else {
+            lock.unlock()
+            return
+        }
+        self.result = result
+        continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+
+        continuation?.resume(returning: result)
+    }
+}
+
 private final class SpacesStreamOperationCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
+    private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
 
     var isCancelled: Bool {
         lock.lock()
@@ -260,9 +338,47 @@ private final class SpacesStreamOperationCancellation: @unchecked Sendable {
     }
 
     func cancel() {
+        let continuations: [CheckedContinuation<Void, Never>]
         lock.lock()
-        defer { lock.unlock() }
+        guard !cancelled else {
+            lock.unlock()
+            return
+        }
         cancelled = true
+        continuations = Array(waiters.values)
+        waiters.removeAll()
+        lock.unlock()
+
+        for continuation in continuations {
+            continuation.resume()
+        }
+    }
+
+    func waitUntilCancelled() async {
+        let waiterID = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                lock.lock()
+                if cancelled {
+                    lock.unlock()
+                    continuation.resume()
+                } else {
+                    waiters[waiterID] = continuation
+                    lock.unlock()
+                }
+            }
+        } onCancel: {
+            removeWaiter(waiterID)
+        }
+    }
+
+    private func removeWaiter(_ waiterID: UUID) {
+        let continuation: CheckedContinuation<Void, Never>?
+        lock.lock()
+        continuation = waiters.removeValue(forKey: waiterID)
+        lock.unlock()
+
+        continuation?.resume()
     }
 }
 

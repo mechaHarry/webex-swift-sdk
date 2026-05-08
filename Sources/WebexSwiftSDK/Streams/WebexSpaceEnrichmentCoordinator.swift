@@ -19,6 +19,11 @@ actor WebexSpaceEnrichmentCoordinator {
         case missing
     }
 
+    private enum BatchLookup<Value: Sendable>: Sendable {
+        case value(Value)
+        case failure(WebexSpaceEnrichmentError)
+    }
+
     private let dependencies: Dependencies
     private var teamNameByID: [String: String?] = [:]
     private var selfPersonID: String?
@@ -89,6 +94,9 @@ actor WebexSpaceEnrichmentCoordinator {
     ) async -> [WebexSpace] {
         var enriched: [WebexSpace] = []
         enriched.reserveCapacity(spaces.count)
+        var batchTeamNameByID: [String: BatchLookup<String?>] = [:]
+        var batchSelfPersonID: BatchLookup<String>?
+        var batchAvatarByPersonID: [String: BatchLookup<String?>] = [:]
 
         for space in spaces {
             let applicable = applicableFields(for: space)
@@ -104,6 +112,7 @@ actor WebexSpaceEnrichmentCoordinator {
                     teamID: teamID,
                     forceRefresh: forceRefresh,
                     shouldCommitCache: shouldCommitCache,
+                    batchTeamNameByID: &batchTeamNameByID,
                     values: &values
                 )
             }
@@ -113,6 +122,8 @@ actor WebexSpaceEnrichmentCoordinator {
                     spaceID: space.id,
                     forceRefresh: forceRefresh,
                     shouldCommitCache: shouldCommitCache,
+                    batchSelfPersonID: &batchSelfPersonID,
+                    batchAvatarByPersonID: &batchAvatarByPersonID,
                     values: &values
                 )
             }
@@ -136,8 +147,19 @@ actor WebexSpaceEnrichmentCoordinator {
         teamID: String,
         forceRefresh: Bool,
         shouldCommitCache: @escaping @Sendable () async -> Bool,
+        batchTeamNameByID: inout [String: BatchLookup<String?>],
         values: inout FieldValues
     ) async {
+        if let lookup = batchTeamNameByID[teamID] {
+            switch lookup {
+            case .value(let teamName):
+                values.teamName = teamName
+            case .failure(let error):
+                values.errors.append(error)
+            }
+            return
+        }
+
         if !forceRefresh, let cached = teamNameByID[teamID] {
             values.teamName = cached
             return
@@ -145,15 +167,15 @@ actor WebexSpaceEnrichmentCoordinator {
 
         do {
             let team = try await dependencies.getTeam(teamID)
+            batchTeamNameByID[teamID] = .value(team.name)
             if await shouldCommitCache() {
                 teamNameByID[teamID] = team.name
             }
             values.teamName = team.name
         } catch {
-            values.errors.append(WebexSpaceEnrichmentError(
-                field: .teamName,
-                error: WebexStreamErrorRedactor.webexStreamError(from: error)
-            ))
+            let fieldError = teamNameError(from: error)
+            batchTeamNameByID[teamID] = .failure(fieldError)
+            values.errors.append(fieldError)
         }
     }
 
@@ -161,13 +183,16 @@ actor WebexSpaceEnrichmentCoordinator {
         spaceID: String,
         forceRefresh: Bool,
         shouldCommitCache: @escaping @Sendable () async -> Bool,
+        batchSelfPersonID: inout BatchLookup<String>?,
+        batchAvatarByPersonID: inout [String: BatchLookup<String?>],
         values: inout FieldValues
     ) async {
         do {
             let otherPersonID = try await otherPersonID(
                 for: spaceID,
                 forceRefresh: forceRefresh,
-                shouldCommitCache: shouldCommitCache
+                shouldCommitCache: shouldCommitCache,
+                batchSelfPersonID: &batchSelfPersonID
             )
             guard let otherPersonID else {
                 let error = missingDirectSpaceParticipantError()
@@ -178,29 +203,44 @@ actor WebexSpaceEnrichmentCoordinator {
                 return
             }
 
+            if let lookup = batchAvatarByPersonID[otherPersonID] {
+                switch lookup {
+                case .value(let avatar):
+                    values.spaceAvatar = avatar
+                case .failure(let error):
+                    values.errors.append(error)
+                }
+                return
+            }
+
             if !forceRefresh, let cached = avatarByPersonID[otherPersonID] {
                 values.spaceAvatar = cached
                 return
             }
 
-            let person = try await dependencies.getPerson(otherPersonID)
-            if await shouldCommitCache() {
-                spaceAvatarErrorBySpaceID[spaceID] = nil
-                avatarByPersonID[otherPersonID] = person.avatar
+            do {
+                let person = try await dependencies.getPerson(otherPersonID)
+                batchAvatarByPersonID[otherPersonID] = .value(person.avatar)
+                if await shouldCommitCache() {
+                    spaceAvatarErrorBySpaceID[spaceID] = nil
+                    avatarByPersonID[otherPersonID] = person.avatar
+                }
+                values.spaceAvatar = person.avatar
+            } catch {
+                let fieldError = spaceAvatarError(from: error)
+                batchAvatarByPersonID[otherPersonID] = .failure(fieldError)
+                values.errors.append(fieldError)
             }
-            values.spaceAvatar = person.avatar
         } catch {
-            values.errors.append(WebexSpaceEnrichmentError(
-                field: .spaceAvatar,
-                error: WebexStreamErrorRedactor.webexStreamError(from: error)
-            ))
+            values.errors.append(spaceAvatarError(from: error))
         }
     }
 
     private func otherPersonID(
         for spaceID: String,
         forceRefresh: Bool,
-        shouldCommitCache: @escaping @Sendable () async -> Bool
+        shouldCommitCache: @escaping @Sendable () async -> Bool,
+        batchSelfPersonID: inout BatchLookup<String>?
     ) async throws -> String? {
         if !forceRefresh {
             switch otherPersonIDBySpaceID[spaceID] {
@@ -216,8 +256,23 @@ actor WebexSpaceEnrichmentCoordinator {
         let selfID: String
         if !forceRefresh, let cachedSelfPersonID = selfPersonID {
             selfID = cachedSelfPersonID
+        } else if let batchSelfPersonID {
+            switch batchSelfPersonID {
+            case .value(let cachedSelfPersonID):
+                selfID = cachedSelfPersonID
+            case .failure(let error):
+                throw error.error
+            }
         } else {
-            let me = try await dependencies.getSelf()
+            let me: WebexPerson
+            do {
+                me = try await dependencies.getSelf()
+            } catch {
+                let fieldError = spaceAvatarError(from: error)
+                batchSelfPersonID = .failure(fieldError)
+                throw fieldError.error
+            }
+            batchSelfPersonID = .value(me.id)
             if await shouldCommitCache() {
                 selfPersonID = me.id
             }
@@ -237,6 +292,20 @@ actor WebexSpaceEnrichmentCoordinator {
             }
         }
         return otherPersonID
+    }
+
+    private func teamNameError(from error: Error) -> WebexSpaceEnrichmentError {
+        WebexSpaceEnrichmentError(
+            field: .teamName,
+            error: WebexStreamErrorRedactor.webexStreamError(from: error)
+        )
+    }
+
+    private func spaceAvatarError(from error: Error) -> WebexSpaceEnrichmentError {
+        WebexSpaceEnrichmentError(
+            field: .spaceAvatar,
+            error: WebexStreamErrorRedactor.webexStreamError(from: error)
+        )
     }
 
     private func missingDirectSpaceParticipantError() -> WebexSpaceEnrichmentError {

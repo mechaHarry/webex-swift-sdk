@@ -219,7 +219,8 @@ private actor WebexSnapshotStreamState<Item: Sendable> {
     }
 
     func refresh() async {
-        guard !isRefreshing else {
+        guard !Task.isCancelled,
+              !isRefreshing else {
             return
         }
 
@@ -229,13 +230,27 @@ private actor WebexSnapshotStreamState<Item: Sendable> {
 
         do {
             let page = try await loadFirstPage()
+            guard !Task.isCancelled else {
+                isRefreshing = false
+                emitSnapshot()
+                return
+            }
             items = page.items
             nextPage = page.nextPage
             pagesLoaded = 1
             revision += 1
             lastUpdatedAt = clock()
             lastError = nil
+        } catch is CancellationError {
+            isRefreshing = false
+            emitSnapshot()
+            return
         } catch {
+            guard !Task.isCancelled else {
+                isRefreshing = false
+                emitSnapshot()
+                return
+            }
             lastError = WebexStreamErrorRedactor.webexStreamError(from: error)
         }
 
@@ -255,7 +270,8 @@ private actor WebexSnapshotStreamState<Item: Sendable> {
     }
 
     func loadNextPage() async {
-        guard !isRefreshing,
+        guard !Task.isCancelled,
+              !isRefreshing,
               !isLoadingNextPage,
               !isPageCapReached,
               let nextPage else {
@@ -268,13 +284,27 @@ private actor WebexSnapshotStreamState<Item: Sendable> {
 
         do {
             let page = try await loadNextPage(nextPage)
+            guard !Task.isCancelled else {
+                isLoadingNextPage = false
+                emitSnapshot()
+                return
+            }
             items = mergedItems(existing: items, incoming: page.items)
             self.nextPage = page.nextPage
             pagesLoaded += 1
             revision += 1
             lastUpdatedAt = clock()
             lastError = nil
+        } catch is CancellationError {
+            isLoadingNextPage = false
+            emitSnapshot()
+            return
         } catch {
+            guard !Task.isCancelled else {
+                isLoadingNextPage = false
+                emitSnapshot()
+                return
+            }
             lastError = WebexStreamErrorRedactor.webexStreamError(from: error)
         }
 

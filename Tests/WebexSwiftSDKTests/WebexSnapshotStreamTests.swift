@@ -245,6 +245,68 @@ final class WebexSnapshotStreamTests: XCTestCase {
         XCTAssertEqual(firstPageCallCount, 1)
     }
 
+    func testCancelledRefreshClearsRefreshingWithoutCommittingResultOrError() async throws {
+        let loader = ControllableStreamPageLoader()
+        let stream = WebexSnapshotStream<StreamTestItem>(
+            id: { $0.id },
+            loadFirstPage: { try await loader.loadFirstPage() },
+            loadNextPage: { try await loader.loadNextPage($0) }
+        )
+
+        var iterator = stream.snapshots.makeAsyncIterator()
+        _ = try await nextSnapshot(from: &iterator)
+
+        let refresh = Task { await stream.refresh() }
+        let loading = try await nextSnapshot(from: &iterator)
+        XCTAssertTrue(loading.isRefreshing)
+
+        refresh.cancel()
+        await loader.succeedFirstPage(items: [.init(id: "item-1", value: "Canceled")])
+        await refresh.value
+
+        let canceled = try await nextSnapshot(from: &iterator)
+        XCTAssertEqual(canceled.items, [])
+        XCTAssertEqual(canceled.revision, 0)
+        XCTAssertNil(canceled.lastError)
+        XCTAssertFalse(canceled.isRefreshing)
+    }
+
+    func testCancelledNextPageClearsLoadingWithoutCommittingResultOrError() async throws {
+        let firstNextPage = WebexPageLink(url: URL(string: "https://webexapis.com/v1/rooms?cursor=first")!)
+        let loader = ControllableStreamPageLoader()
+        let stream = WebexSnapshotStream<StreamTestItem>(
+            id: { $0.id },
+            loadFirstPage: { try await loader.loadFirstPage() },
+            loadNextPage: { try await loader.loadNextPage($0) }
+        )
+
+        var iterator = stream.snapshots.makeAsyncIterator()
+        _ = try await nextSnapshot(from: &iterator)
+
+        let refresh = Task { await stream.refresh() }
+        _ = try await nextSnapshot(from: &iterator)
+        await loader.succeedFirstPage(
+            items: [.init(id: "item-1", value: "First")],
+            nextPage: firstNextPage
+        )
+        await refresh.value
+        let loaded = try await nextSnapshot(from: &iterator)
+
+        let nextPage = Task { await stream.loadNextPage() }
+        let loadingNext = try await nextSnapshot(from: &iterator)
+        XCTAssertTrue(loadingNext.isLoadingNextPage)
+
+        nextPage.cancel()
+        await loader.succeedNextPage(items: [.init(id: "item-2", value: "Canceled")])
+        await nextPage.value
+
+        let canceled = try await nextSnapshot(from: &iterator)
+        XCTAssertEqual(canceled.items, loaded.items)
+        XCTAssertEqual(canceled.revision, loaded.revision)
+        XCTAssertNil(canceled.lastError)
+        XCTAssertFalse(canceled.isLoadingNextPage)
+    }
+
     func testRefreshOnTriggersRefreshesWhenPredicateMatches() async throws {
         let loader = ControllableStreamPageLoader()
         let stream = WebexSnapshotStream<StreamTestItem>(

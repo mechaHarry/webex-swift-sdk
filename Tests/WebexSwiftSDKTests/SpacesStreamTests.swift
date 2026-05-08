@@ -352,6 +352,43 @@ final class SpacesStreamTests: XCTestCase {
         queuedRefresh.cancel()
     }
 
+    func testCancelledQueuedRefreshReturnsBeforePreviousOperationCompletes() async throws {
+        let loader = ControllableSpacesPageLoader()
+        let dependencies = PausingSpacesStreamDependencies()
+        await dependencies.setTeam(WebexTeam(id: "team-1", name: "Old"))
+        let stream = SpacesStream(
+            baseStream: WebexSnapshotStream<WebexSpace>(
+                id: { $0.id },
+                loadFirstPage: { try await loader.loadFirstPage() },
+                loadNextPage: { try await loader.loadNextPage($0) }
+            ),
+            enricher: WebexSpaceEnrichmentCoordinator(dependencies: dependencies.makeDependencies())
+        )
+
+        let initialRefresh = Task { await stream.refresh() }
+        let didStartInitialRefresh = await loader.waitForFirstPageCallCount(1)
+        XCTAssertTrue(didStartInitialRefresh)
+        await loader.succeedFirstPage(items: [
+            WebexSpace(id: "space-1", title: "Old Space", type: .group, teamID: "team-1")
+        ])
+        await initialRefresh.value
+
+        await dependencies.pauseTeam("team-1")
+        let pausedEnrichment = Task { await stream.refreshEnrichment() }
+        await dependencies.waitForPausedTeamRequest("team-1")
+
+        let queuedRefresh = Task { await stream.refresh() }
+        await Task.yield()
+        queuedRefresh.cancel()
+
+        let finishedBeforeResume = await taskFinishesWithin(queuedRefresh)
+        XCTAssertTrue(finishedBeforeResume)
+
+        await dependencies.resumeTeam("team-1")
+        await pausedEnrichment.value
+        await queuedRefresh.value
+    }
+
     func testQueuedRefreshFailureDoesNotLeaveActiveEnrichmentLoading() async throws {
         let loader = ControllableSpacesPageLoader()
         let dependencies = PausingSpacesStreamDependencies()
@@ -416,6 +453,31 @@ private func nextSnapshot(
 
     XCTFail("Timed out waiting for matching spaces stream snapshot")
     return try await nextSnapshot(from: &iterator)
+}
+
+private func taskFinishesWithin(
+    _ task: Task<Void, Never>,
+    nanoseconds: UInt64 = 50_000_000
+) async -> Bool {
+    let completion = TaskCompletionFlag()
+    Task {
+        await task.value
+        await completion.complete()
+    }
+    try? await Task.sleep(nanoseconds: nanoseconds)
+    return await completion.isComplete
+}
+
+private actor TaskCompletionFlag {
+    private var completed = false
+
+    var isComplete: Bool {
+        completed
+    }
+
+    func complete() {
+        completed = true
+    }
 }
 
 private actor ControllableSpacesPageLoader {
