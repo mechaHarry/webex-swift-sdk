@@ -243,7 +243,7 @@ final class SpacesStreamTests: XCTestCase {
         }
         await loader.succeedFirstPage(items: [
             WebexSpace(id: "space-2", title: "Fresh Space", type: .group, teamID: "team-1")
-        ])
+        ], nextPage: WebexPageLink(url: URL(string: "https://webexapis.com/v1/rooms?cursor=next")!))
         await refresh.value
 
         let snapshot = await stream.currentSnapshot()
@@ -253,21 +253,65 @@ final class SpacesStreamTests: XCTestCase {
         XCTAssertEqual(teamRequests, ["team-1", "team-1", "team-1"])
 
         await dependencies.setTeam(WebexTeam(id: "team-1", name: "Fresh Again"))
-        let ordinaryRefresh = Task { await stream.refresh() }
-        let didStartOrdinaryRefresh = await loader.waitForFirstPageCallCount(3)
-        XCTAssertTrue(didStartOrdinaryRefresh)
-        guard didStartOrdinaryRefresh else {
-            await ordinaryRefresh.value
+        let nextPage = Task { await stream.loadNextPage() }
+        let didStartNextPage = await loader.waitForNextPageCallCount(1)
+        XCTAssertTrue(didStartNextPage)
+        guard didStartNextPage else {
+            await nextPage.value
             return
         }
-        await loader.succeedFirstPage(items: [
+        await loader.succeedNextPage(items: [
             WebexSpace(id: "space-3", title: "Cached Space", type: .group, teamID: "team-1")
         ])
-        await ordinaryRefresh.value
+        await nextPage.value
 
         let cachedSnapshot = await stream.currentSnapshot()
-        XCTAssertEqual(cachedSnapshot.items.map(\.id), ["space-3"])
-        XCTAssertEqual(cachedSnapshot.items.first?.enriched.teamName, "Fresh Again")
+        XCTAssertEqual(cachedSnapshot.items.map(\.id), ["space-2", "space-3"])
+        XCTAssertEqual(cachedSnapshot.items.map(\.enriched.teamName), ["Fresh", "Fresh"])
+        let finalTeamRequests = await dependencies.teamRequestsValue()
+        XCTAssertEqual(finalTeamRequests, ["team-1", "team-1", "team-1"])
+    }
+
+    func testCancelledQueuedRefreshDoesNotRunBaseLoadOrEnrichment() async throws {
+        let loader = ControllableSpacesPageLoader()
+        let dependencies = PausingSpacesStreamDependencies()
+        await dependencies.setTeam(WebexTeam(id: "team-1", name: "Old"))
+        let stream = SpacesStream(
+            baseStream: WebexSnapshotStream<WebexSpace>(
+                id: { $0.id },
+                loadFirstPage: { try await loader.loadFirstPage() },
+                loadNextPage: { try await loader.loadNextPage($0) }
+            ),
+            enricher: WebexSpaceEnrichmentCoordinator(dependencies: dependencies.makeDependencies())
+        )
+
+        let initialRefresh = Task { await stream.refresh() }
+        let didStartInitialRefresh = await loader.waitForFirstPageCallCount(1)
+        XCTAssertTrue(didStartInitialRefresh)
+        await loader.succeedFirstPage(items: [
+            WebexSpace(id: "space-1", title: "Old Space", type: .group, teamID: "team-1")
+        ])
+        await initialRefresh.value
+
+        await dependencies.pauseTeam("team-1")
+        let pausedEnrichment = Task { await stream.refreshEnrichment() }
+        await dependencies.waitForPausedTeamRequest("team-1")
+
+        let queuedRefresh = Task { await stream.refresh() }
+        await Task.yield()
+        queuedRefresh.cancel()
+        await dependencies.resumeTeam("team-1")
+        await pausedEnrichment.value
+
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+
+        let firstPageCallCount = await loader.firstPageCallCountValue()
+        XCTAssertEqual(firstPageCallCount, 1)
+        let teamRequests = await dependencies.teamRequestsValue()
+        XCTAssertEqual(teamRequests, ["team-1", "team-1"])
+        queuedRefresh.cancel()
     }
 }
 
@@ -295,7 +339,9 @@ private func nextSnapshot(
 
 private actor ControllableSpacesPageLoader {
     private(set) var firstPageCallCount = 0
+    private(set) var nextPageCallCount = 0
     private var firstPageContinuations: [CheckedContinuation<WebexStreamPage<WebexSpace>, Error>] = []
+    private var nextPageContinuations: [CheckedContinuation<WebexStreamPage<WebexSpace>, Error>] = []
 
     func loadFirstPage() async throws -> WebexStreamPage<WebexSpace> {
         firstPageCallCount += 1
@@ -305,13 +351,29 @@ private actor ControllableSpacesPageLoader {
     }
 
     func loadNextPage(_ nextPage: WebexPageLink) async throws -> WebexStreamPage<WebexSpace> {
-        WebexStreamPage(items: [], nextPage: nil)
+        nextPageCallCount += 1
+        return try await withCheckedThrowingContinuation { continuation in
+            nextPageContinuations.append(continuation)
+        }
     }
 
-    func succeedFirstPage(items: [WebexSpace]) {
+    func succeedFirstPage(
+        items: [WebexSpace],
+        nextPage: WebexPageLink? = nil
+    ) {
         firstPageContinuations.removeFirst().resume(returning: WebexStreamPage(
             items: items,
-            nextPage: nil
+            nextPage: nextPage
+        ))
+    }
+
+    func succeedNextPage(
+        items: [WebexSpace],
+        nextPage: WebexPageLink? = nil
+    ) {
+        nextPageContinuations.removeFirst().resume(returning: WebexStreamPage(
+            items: items,
+            nextPage: nextPage
         ))
     }
 
@@ -331,6 +393,16 @@ private actor ControllableSpacesPageLoader {
             await Task.yield()
         }
         return firstPageCallCount >= expectedCount
+    }
+
+    func waitForNextPageCallCount(_ expectedCount: Int) async -> Bool {
+        for _ in 0..<100 {
+            if nextPageCallCount >= expectedCount {
+                return true
+            }
+            await Task.yield()
+        }
+        return nextPageCallCount >= expectedCount
     }
 }
 

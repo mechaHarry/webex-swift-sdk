@@ -23,6 +23,10 @@ public final class SpacesStream: @unchecked Sendable {
     }
 
     public func refresh() async {
+        guard !Task.isCancelled else {
+            return
+        }
+
         let generationID = await generation.next()
         await operationQueue.run { [self] in
             await baseStream.refresh()
@@ -35,6 +39,10 @@ public final class SpacesStream: @unchecked Sendable {
     }
 
     public func loadNextPage() async {
+        guard !Task.isCancelled else {
+            return
+        }
+
         let generationID = await generation.next()
         await operationQueue.run { [self] in
             await baseStream.loadNextPage()
@@ -47,6 +55,10 @@ public final class SpacesStream: @unchecked Sendable {
     }
 
     public func refreshEnrichment() async {
+        guard !Task.isCancelled else {
+            return
+        }
+
         let generationID = await generation.next()
         await operationQueue.run { [self] in
             let snapshot = await baseStream.currentSnapshot()
@@ -82,6 +94,10 @@ public final class SpacesStream: @unchecked Sendable {
         generationID: UInt64,
         snapshot: WebexStreamSnapshot<WebexSpace>
     ) async {
+        guard !Task.isCancelled else {
+            return
+        }
+
         let loadingItems = await enricher.immediateItems(
             for: snapshot.items,
             forceRefresh: forceRefresh
@@ -90,6 +106,10 @@ public final class SpacesStream: @unchecked Sendable {
             return
         }
         await baseStream.replaceItems(loadingItems, incrementRevision: false)
+
+        guard !Task.isCancelled else {
+            return
+        }
 
         let enrichedItems = await enricher.enrichedItems(
             for: snapshot.items,
@@ -112,18 +132,54 @@ private actor SpacesStreamOperationQueue {
     private var tailID: UInt64 = 0
 
     func run(_ operation: @escaping @Sendable () async -> Void) async {
+        guard !Task.isCancelled else {
+            return
+        }
+
+        let queuedOperation = SpacesStreamQueuedOperation()
         let previous = tail
         tailID += 1
         let operationID = tailID
         let task = Task {
             await previous?.value
+            let operationCancelled = await queuedOperation.isCancelled
+            guard !Task.isCancelled,
+                  !operationCancelled else {
+                return
+            }
             await operation()
         }
         tail = task
-        await task.value
+
+        if Task.isCancelled {
+            task.cancel()
+            await queuedOperation.cancel()
+        }
+
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+            Task {
+                await queuedOperation.cancel()
+            }
+        }
+
         if tailID == operationID {
             tail = nil
         }
+    }
+}
+
+private actor SpacesStreamQueuedOperation {
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        cancelled
+    }
+
+    func cancel() {
+        cancelled = true
     }
 }
 
