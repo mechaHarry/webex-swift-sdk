@@ -206,6 +206,10 @@ actor WebexSpaceEnrichmentCoordinator {
             if let lookup = batchAvatarByPersonID[otherPersonID] {
                 switch lookup {
                 case .value(let avatar):
+                    if await shouldCommitCache() {
+                        spaceAvatarErrorBySpaceID[spaceID] = nil
+                        avatarByPersonID[otherPersonID] = avatar
+                    }
                     values.spaceAvatar = avatar
                 case .failure(let error):
                     values.errors.append(error)

@@ -144,6 +144,7 @@ public final class SpacesStream: @unchecked Sendable {
         }
 
         guard !Task.isCancelled else {
+            await restoreItems(from: snapshot, operation: operation)
             return
         }
 
@@ -158,6 +159,10 @@ public final class SpacesStream: @unchecked Sendable {
                 await operationGate.canCommitCache(operation)
             }
         )
+        guard !Task.isCancelled else {
+            await restoreItems(from: snapshot, operation: operation)
+            return
+        }
         guard await canReplaceItems(from: snapshot, operation: operation) else {
             return
         }
@@ -176,6 +181,22 @@ public final class SpacesStream: @unchecked Sendable {
 
         let currentSnapshot = await baseStream.currentSnapshot()
         return currentSnapshot.revision == snapshot.revision
+    }
+
+    private func restoreItems(
+        from snapshot: WebexStreamSnapshot<WebexSpace>,
+        operation: SpacesStreamOperation
+    ) async {
+        guard await operationGate.canRestore(operation) else {
+            return
+        }
+
+        let currentSnapshot = await baseStream.currentSnapshot()
+        guard currentSnapshot.revision == snapshot.revision else {
+            return
+        }
+
+        await baseStream.replaceItems(snapshot.items, incrementRevision: false)
     }
 }
 
@@ -424,6 +445,12 @@ private actor SpacesStreamOperationGate {
 
     func isRunning(_ operation: SpacesStreamOperation) -> Bool {
         running.contains(operation.id)
+    }
+
+    func canRestore(_ operation: SpacesStreamOperation) -> Bool {
+        pruneCancelledPending()
+        return !pending.keys.contains(where: { $0 > operation.id })
+            && !running.contains(where: { $0 > operation.id })
     }
 
     private func pruneCancelledPending() {

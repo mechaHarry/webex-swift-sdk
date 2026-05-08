@@ -118,6 +118,46 @@ final class WebexSpaceEnrichmentCoordinatorTests: XCTestCase {
         XCTAssertEqual(dependencies.personRequests, ["other"])
     }
 
+    func testSuccessfulBatchAvatarHitClearsCachedSpaceAvatarError() async {
+        let dependencies = RecordingSpaceEnrichmentDependencies()
+        dependencies.selfPerson = person(id: "self", avatar: nil)
+        dependencies.membershipsByRoomID["direct-1"] = [
+            WebexMembership(id: "m-self-1", roomID: "direct-1", personID: "self")
+        ]
+        let coordinator = WebexSpaceEnrichmentCoordinator(dependencies: dependencies.makeDependencies())
+        let failedSpace = [space(id: "direct-1", type: .direct)]
+
+        let failed = await coordinator.enrichedItems(for: failedSpace, forceRefresh: false)
+        XCTAssertEqual(failed[0].enriched.status, .failed)
+
+        dependencies.membershipsByRoomID["direct-1"] = [
+            WebexMembership(id: "m-self-1", roomID: "direct-1", personID: "self"),
+            WebexMembership(id: "m-other-1", roomID: "direct-1", personID: "other")
+        ]
+        dependencies.membershipsByRoomID["direct-2"] = [
+            WebexMembership(id: "m-self-2", roomID: "direct-2", personID: "self"),
+            WebexMembership(id: "m-other-2", roomID: "direct-2", personID: "other")
+        ]
+        dependencies.personByID["other"] = person(id: "other", avatar: "https://example.com/other.png")
+
+        let refreshed = await coordinator.enrichedItems(
+            for: [
+                space(id: "direct-2", type: .direct),
+                space(id: "direct-1", type: .direct)
+            ],
+            forceRefresh: true
+        )
+        let immediate = await coordinator.immediateItems(for: failedSpace, forceRefresh: false)
+
+        XCTAssertEqual(refreshed.map(\.enriched.spaceAvatar), [
+            "https://example.com/other.png",
+            "https://example.com/other.png"
+        ])
+        XCTAssertEqual(immediate[0].enriched.spaceAvatar, "https://example.com/other.png")
+        XCTAssertEqual(immediate[0].enriched.errors, [])
+        XCTAssertEqual(immediate[0].enriched.status, .complete)
+    }
+
     func testDirectSpaceAvatarFailureIsFieldScopedAndRedacted() async {
         let dependencies = RecordingSpaceEnrichmentDependencies()
         dependencies.selfPerson = person(id: "self", avatar: nil)

@@ -391,8 +391,13 @@ final class WebexSnapshotStreamTests: XCTestCase {
             iterator = nil
         }
 
-        for _ in 0..<20 {
-            await Task.yield()
+        for _ in 0..<1_000 {
+            let subscriberCount = await stream.subscriberCount()
+            let tombstoneCount = await stream.subscriptionTombstoneCount()
+            if subscriberCount == 0, tombstoneCount == 0 {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000)
         }
 
         let subscriberCount = await stream.subscriberCount()
