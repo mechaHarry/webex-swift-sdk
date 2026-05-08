@@ -75,12 +75,12 @@ follow-up enrichment calls and decode `space.enriched == .empty`. Use
 `await stream.refreshEnrichment()` to refresh cached enrichment details without
 reloading the base spaces page.
 
-Migration note: `SpacesStream` and `RoomsStream` are now named stream wrapper
-types instead of aliases to `WebexSnapshotStream<WebexSpace>`. Existing client
-code that consumes `stream.snapshots`, `currentSnapshot()`, `refresh()`,
-`loadNextPage()`, or `refreshOnTriggers` can keep those calls. Code that
-constructed `WebexSnapshotStream<WebexSpace>` directly or accepted that concrete
-generic type should accept `SpacesStream`/`RoomsStream` instead.
+Migration note: `SpacesStream` is now a named stream wrapper instead of an alias
+to `WebexSnapshotStream<WebexSpace>`, and `RoomsStream` aliases `SpacesStream`.
+Existing client code that consumes `stream.snapshots`, `currentSnapshot()`,
+`refresh()`, `loadNextPage()`, or `refreshOnTriggers` can keep those calls. Code
+that constructed `WebexSnapshotStream<WebexSpace>` directly or accepted that
+concrete generic type should accept `SpacesStream`/`RoomsStream` instead.
 
 ## Realtime
 
