@@ -176,6 +176,53 @@ final class WebexSnapshotStreamTests: XCTestCase {
         XCTAssertFalse(replaced.isLoadingNextPage)
     }
 
+    func testReplaceItemsWithoutIncrementingRevisionPreservesStreamState() async throws {
+        let nextPage = WebexPageLink(url: URL(string: "https://webexapis.com/v1/rooms?cursor=next")!)
+        let loader = ControllableStreamPageLoader()
+        let clock = IncrementingClock()
+        let stream = WebexSnapshotStream<StreamTestItem>(
+            pageLimit: 3,
+            clock: { clock.now() },
+            id: { $0.id },
+            loadFirstPage: { try await loader.loadFirstPage() },
+            loadNextPage: { try await loader.loadNextPage($0) }
+        )
+
+        var iterator = stream.snapshots.makeAsyncIterator()
+        _ = await iterator.next()
+
+        let refresh = Task { await stream.refresh() }
+        _ = await iterator.next()
+        await loader.succeedFirstPage(
+            items: [.init(id: "item-1", value: "Base")],
+            nextPage: nextPage
+        )
+        await refresh.value
+        let loaded = try await nextSnapshot(from: &iterator)
+
+        let failedNextPage = Task { await stream.loadNextPage() }
+        _ = await iterator.next()
+        await loader.failNextPage(WebexSDKError.network("callback code=secret-code"))
+        await failedNextPage.value
+        let failed = try await nextSnapshot(from: &iterator)
+        XCTAssertEqual(failed.revision, loaded.revision)
+        XCTAssertEqual(failed.lastError, .network("callback code=[redacted]"))
+
+        await stream.replaceItems(
+            [.init(id: "item-1", value: "Enriched")],
+            incrementRevision: false
+        )
+
+        let replaced = try await nextSnapshot(from: &iterator)
+        XCTAssertEqual(replaced.items, [.init(id: "item-1", value: "Enriched")])
+        XCTAssertEqual(replaced.revision, failed.revision)
+        XCTAssertEqual(replaced.lastUpdatedAt, failed.lastUpdatedAt)
+        XCTAssertEqual(replaced.pagination, failed.pagination)
+        XCTAssertEqual(replaced.lastError, failed.lastError)
+        XCTAssertEqual(replaced.isRefreshing, failed.isRefreshing)
+        XCTAssertEqual(replaced.isLoadingNextPage, failed.isLoadingNextPage)
+    }
+
     func testConcurrentRefreshesCoalesceIntoOneLoad() async throws {
         let loader = ControllableStreamPageLoader()
         let stream = WebexSnapshotStream<StreamTestItem>(
@@ -335,5 +382,9 @@ private actor ControllableStreamPageLoader {
 
     func failFirstPage(_ error: WebexSDKError) {
         firstPageContinuations.removeFirst().resume(throwing: error)
+    }
+
+    func failNextPage(_ error: WebexSDKError) {
+        nextPageContinuations.removeFirst().resume(throwing: error)
     }
 }

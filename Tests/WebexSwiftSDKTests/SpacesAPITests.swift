@@ -69,6 +69,65 @@ final class SpacesAPITests: XCTestCase {
         XCTAssertEqual(iso8601(space.madePublic), "2026-04-30T19:00:00Z")
     }
 
+    func testReplacingEnrichmentPreservesSpaceFields() throws {
+        let lastActivity = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-04-30T18:01:02Z"))
+        let created = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-04-29T17:00:00Z"))
+        let madePublic = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-04-30T19:00:00Z"))
+        let errors = [
+            "title": WebexPartialResourceError(code: "kms_failure", reason: "Could not decrypt title")
+        ]
+        let originalEnrichment = WebexSpaceEnrichment(
+            teamName: "Original Team",
+            spaceAvatar: "https://example.com/original.png",
+            status: .partial
+        )
+        let space = WebexSpace(
+            id: "space-id",
+            title: "Incident Review",
+            type: .group,
+            isLocked: true,
+            teamID: "team-id",
+            lastActivity: lastActivity,
+            creatorID: "creator-id",
+            created: created,
+            ownerID: "owner-id",
+            description: "Postmortem space",
+            isPublic: true,
+            isReadOnly: false,
+            isAnnouncementOnly: true,
+            classificationID: "classification-id",
+            madePublic: madePublic,
+            errors: errors,
+            enriched: originalEnrichment
+        )
+        let newEnrichment = WebexSpaceEnrichment(
+            teamName: "Enriched Team",
+            spaceAvatar: "https://example.com/enriched.png",
+            status: .complete
+        )
+
+        let replaced = space.replacingEnrichment(newEnrichment)
+
+        XCTAssertEqual(replaced.id, space.id)
+        XCTAssertEqual(replaced.title, space.title)
+        XCTAssertEqual(replaced.type, space.type)
+        XCTAssertEqual(replaced.isLocked, space.isLocked)
+        XCTAssertEqual(replaced.teamID, space.teamID)
+        XCTAssertEqual(replaced.lastActivity, space.lastActivity)
+        XCTAssertEqual(replaced.creatorID, space.creatorID)
+        XCTAssertEqual(replaced.created, space.created)
+        XCTAssertEqual(replaced.ownerID, space.ownerID)
+        XCTAssertEqual(replaced.description, space.description)
+        XCTAssertEqual(replaced.isPublic, space.isPublic)
+        XCTAssertEqual(replaced.isReadOnly, space.isReadOnly)
+        XCTAssertEqual(replaced.isAnnouncementOnly, space.isAnnouncementOnly)
+        XCTAssertEqual(replaced.classificationID, space.classificationID)
+        XCTAssertEqual(replaced.madePublic, space.madePublic)
+        XCTAssertEqual(replaced.errors, space.errors)
+        XCTAssertEqual(replaced.enriched, newEnrichment)
+        XCTAssertNotEqual(replaced.enriched, space.enriched)
+    }
+
     func testSpaceTypePreservesUnknownValues() throws {
         let json = Data(#"{"id":"space-id","type":"future-type"}"#.utf8)
 
