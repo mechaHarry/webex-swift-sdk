@@ -4,6 +4,7 @@ public final class SpacesStream: @unchecked Sendable {
     private let baseStream: WebexSnapshotStream<WebexSpace>
     private let enricher: WebexSpaceEnrichmentCoordinator
     private let generation = SpacesStreamGeneration()
+    private let operationQueue = SpacesStreamOperationQueue()
 
     public var snapshots: AsyncStream<WebexStreamSnapshot<WebexSpace>> {
         baseStream.snapshots
@@ -22,29 +23,35 @@ public final class SpacesStream: @unchecked Sendable {
     }
 
     public func refresh() async {
-        let generationID = await generation.next()
-        await baseStream.refresh()
-        let snapshot = await baseStream.currentSnapshot()
-        guard snapshot.lastError == nil else {
-            return
+        await operationQueue.run { [self] in
+            let generationID = await generation.next()
+            await baseStream.refresh()
+            let snapshot = await baseStream.currentSnapshot()
+            guard snapshot.lastError == nil else {
+                return
+            }
+            await runEnrichment(forceRefresh: false, generationID: generationID, snapshot: snapshot)
         }
-        await runEnrichment(forceRefresh: false, generationID: generationID, snapshot: snapshot)
     }
 
     public func loadNextPage() async {
-        let generationID = await generation.next()
-        await baseStream.loadNextPage()
-        let snapshot = await baseStream.currentSnapshot()
-        guard snapshot.lastError == nil else {
-            return
+        await operationQueue.run { [self] in
+            let generationID = await generation.next()
+            await baseStream.loadNextPage()
+            let snapshot = await baseStream.currentSnapshot()
+            guard snapshot.lastError == nil else {
+                return
+            }
+            await runEnrichment(forceRefresh: false, generationID: generationID, snapshot: snapshot)
         }
-        await runEnrichment(forceRefresh: false, generationID: generationID, snapshot: snapshot)
     }
 
     public func refreshEnrichment() async {
-        let generationID = await generation.next()
-        let snapshot = await baseStream.currentSnapshot()
-        await runEnrichment(forceRefresh: true, generationID: generationID, snapshot: snapshot)
+        await operationQueue.run { [self] in
+            let generationID = await generation.next()
+            let snapshot = await baseStream.currentSnapshot()
+            await runEnrichment(forceRefresh: true, generationID: generationID, snapshot: snapshot)
+        }
     }
 
     public func refreshOnTriggers(
@@ -93,6 +100,26 @@ public final class SpacesStream: @unchecked Sendable {
         }
         if enrichedItems != loadingItems {
             await baseStream.replaceItems(enrichedItems, incrementRevision: true)
+        }
+    }
+}
+
+private actor SpacesStreamOperationQueue {
+    private var tail: Task<Void, Never>?
+    private var tailID: UInt64 = 0
+
+    func run(_ operation: @escaping @Sendable () async -> Void) async {
+        let previous = tail
+        tailID += 1
+        let operationID = tailID
+        let task = Task {
+            await previous?.value
+            await operation()
+        }
+        tail = task
+        await task.value
+        if tailID == operationID {
+            tail = nil
         }
     }
 }
