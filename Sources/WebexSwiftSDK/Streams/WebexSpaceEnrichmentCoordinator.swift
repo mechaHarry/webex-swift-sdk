@@ -14,10 +14,16 @@ actor WebexSpaceEnrichmentCoordinator {
         var errors: [WebexSpaceEnrichmentError] = []
     }
 
+    private enum OtherPersonCache: Equatable, Sendable {
+        case personID(String)
+        case missing
+    }
+
     private let dependencies: Dependencies
     private var teamNameByID: [String: String?] = [:]
     private var selfPersonID: String?
-    private var otherPersonIDBySpaceID: [String: String?] = [:]
+    private var otherPersonIDBySpaceID: [String: OtherPersonCache] = [:]
+    private var spaceAvatarErrorBySpaceID: [String: WebexSpaceEnrichmentError] = [:]
     private var avatarByPersonID: [String: String?] = [:]
 
     init(dependencies: Dependencies) {
@@ -50,10 +56,13 @@ actor WebexSpaceEnrichmentCoordinator {
             }
 
             if applicable.contains(.spaceAvatar) {
-                if let cachedOtherPersonID = otherPersonIDBySpaceID[space.id],
-                   let otherPersonID = cachedOtherPersonID,
-                   let cachedAvatar = avatarByPersonID[otherPersonID] {
+                if let cachedError = spaceAvatarErrorBySpaceID[space.id] {
+                    values.errors.append(cachedError)
+                } else if case .personID(let otherPersonID) = otherPersonIDBySpaceID[space.id],
+                          let cachedAvatar = avatarByPersonID[otherPersonID] {
                     values.spaceAvatar = cachedAvatar
+                } else if otherPersonIDBySpaceID[space.id] == .missing {
+                    values.errors.append(missingDirectSpaceParticipantError())
                 } else {
                     pending = true
                 }
@@ -142,12 +151,9 @@ actor WebexSpaceEnrichmentCoordinator {
         do {
             let otherPersonID = try await otherPersonID(for: spaceID, forceRefresh: forceRefresh)
             guard let otherPersonID else {
-                values.errors.append(WebexSpaceEnrichmentError(
-                    field: .spaceAvatar,
-                    error: WebexStreamErrorRedactor.webexStreamError(
-                        from: WebexSDKError.network("Missing direct space participant")
-                    )
-                ))
+                let error = missingDirectSpaceParticipantError()
+                spaceAvatarErrorBySpaceID[spaceID] = error
+                values.errors.append(error)
                 return
             }
 
@@ -157,6 +163,7 @@ actor WebexSpaceEnrichmentCoordinator {
             }
 
             let person = try await dependencies.getPerson(otherPersonID)
+            spaceAvatarErrorBySpaceID[spaceID] = nil
             avatarByPersonID[otherPersonID] = person.avatar
             values.spaceAvatar = person.avatar
         } catch {
@@ -171,8 +178,15 @@ actor WebexSpaceEnrichmentCoordinator {
         for spaceID: String,
         forceRefresh: Bool
     ) async throws -> String? {
-        if !forceRefresh, let cached = otherPersonIDBySpaceID[spaceID] {
-            return cached
+        if !forceRefresh {
+            switch otherPersonIDBySpaceID[spaceID] {
+            case .personID(let cachedPersonID):
+                return cachedPersonID
+            case .missing:
+                return nil
+            case nil:
+                break
+            }
         }
 
         let selfID: String
@@ -189,8 +203,21 @@ actor WebexSpaceEnrichmentCoordinator {
             .compactMap(\.personID)
             .first { $0 != selfID }
 
-        otherPersonIDBySpaceID[spaceID] = otherPersonID
+        if let otherPersonID {
+            otherPersonIDBySpaceID[spaceID] = .personID(otherPersonID)
+        } else {
+            otherPersonIDBySpaceID[spaceID] = .missing
+        }
         return otherPersonID
+    }
+
+    private func missingDirectSpaceParticipantError() -> WebexSpaceEnrichmentError {
+        WebexSpaceEnrichmentError(
+            field: .spaceAvatar,
+            error: WebexStreamErrorRedactor.webexStreamError(
+                from: WebexSDKError.network("Missing direct space participant")
+            )
+        )
     }
 
     private func applicableFields(for space: WebexSpace) -> Set<WebexSpaceEnrichmentField> {

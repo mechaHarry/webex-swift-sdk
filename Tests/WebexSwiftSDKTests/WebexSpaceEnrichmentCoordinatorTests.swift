@@ -94,6 +94,28 @@ final class WebexSpaceEnrichmentCoordinatorTests: XCTestCase {
         XCTAssertEqual(enriched[0].enriched.errors.first?.error, .network("callback code=[redacted]"))
     }
 
+    func testImmediateItemsReuseCachedMissingDirectParticipantFailure() async {
+        let dependencies = RecordingSpaceEnrichmentDependencies()
+        dependencies.selfPerson = person(id: "self", avatar: nil)
+        dependencies.membershipsByRoomID["direct-space"] = [
+            WebexMembership(id: "m-self", roomID: "direct-space", personID: "self")
+        ]
+        let coordinator = WebexSpaceEnrichmentCoordinator(dependencies: dependencies.makeDependencies())
+        let spaces = [space(id: "direct-space", type: .direct)]
+
+        let enriched = await coordinator.enrichedItems(for: spaces, forceRefresh: false)
+        let immediate = await coordinator.immediateItems(for: spaces, forceRefresh: false)
+
+        XCTAssertNil(enriched[0].enriched.spaceAvatar)
+        XCTAssertEqual(enriched[0].enriched.status, .failed)
+        XCTAssertEqual(enriched[0].enriched.errors.count, 1)
+        XCTAssertEqual(enriched[0].enriched.errors.first?.field, .spaceAvatar)
+        XCTAssertEqual(enriched[0].enriched.errors.first?.error, .network("Missing direct space participant"))
+        XCTAssertNil(immediate[0].enriched.spaceAvatar)
+        XCTAssertEqual(immediate[0].enriched.status, .failed)
+        XCTAssertEqual(immediate[0].enriched.errors, enriched[0].enriched.errors)
+    }
+
     func testMixedApplicableSpaceWithNilTeamNameAndAvatarFailureIsPartial() async {
         let dependencies = RecordingSpaceEnrichmentDependencies()
         dependencies.teamByID["team-1"] = WebexTeam(id: "team-1", name: nil)
