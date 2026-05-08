@@ -209,6 +209,44 @@ final class SpacesStreamTests: XCTestCase {
         XCTAssertEqual(refreshed.items.first?.enriched.teamName, "New")
     }
 
+    func testStaleEnrichmentResultDoesNotOverwriteNewerSnapshot() async throws {
+        let dependencies = PausingSpacesStreamDependencies()
+        await dependencies.setTeam(WebexTeam(id: "team-1", name: "Old"))
+        let baseStream = WebexSnapshotStream<WebexSpace>(
+            id: { $0.id },
+            loadFirstPage: { WebexStreamPage(items: [], nextPage: nil) },
+            loadNextPage: { _ in WebexStreamPage(items: [], nextPage: nil) }
+        )
+        await baseStream.replaceItems([
+            WebexSpace(id: "space-1", title: "Old Space", type: .group, teamID: "team-1")
+        ])
+        let stream = SpacesStream(
+            baseStream: baseStream,
+            enricher: WebexSpaceEnrichmentCoordinator(dependencies: dependencies.makeDependencies())
+        )
+
+        await dependencies.pauseTeam("team-1")
+        let staleEnrichment = Task { await stream.refreshEnrichment() }
+        await dependencies.waitForPausedTeamRequest("team-1")
+
+        await baseStream.replaceItems([
+            WebexSpace(
+                id: "space-2",
+                title: "Newer Space",
+                type: .group,
+                teamID: "team-2",
+                enriched: WebexSpaceEnrichment(teamName: "Newer", status: .complete)
+            )
+        ])
+        await dependencies.resumeTeam("team-1")
+        await staleEnrichment.value
+
+        let snapshot = await stream.currentSnapshot()
+        XCTAssertEqual(snapshot.items.map(\.id), ["space-2"])
+        XCTAssertEqual(snapshot.items.first?.enriched.teamName, "Newer")
+        XCTAssertEqual(snapshot.items.first?.enriched.status, .complete)
+    }
+
     func testOverlappingRefreshesRunSeriallyAndEnrichFinalRefreshResult() async throws {
         let loader = ControllableSpacesPageLoader()
         let dependencies = RecordingSpacesStreamDependencies()
