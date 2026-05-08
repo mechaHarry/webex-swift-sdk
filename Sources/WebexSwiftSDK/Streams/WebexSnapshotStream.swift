@@ -206,7 +206,7 @@ private actor WebexSnapshotStreamState<Item: Sendable> {
             lastUpdatedAt = clock()
             lastError = nil
         } catch {
-            lastError = Self.webexStreamError(from: error)
+            lastError = WebexStreamErrorRedactor.webexStreamError(from: error)
         }
 
         isRefreshing = false
@@ -245,7 +245,7 @@ private actor WebexSnapshotStreamState<Item: Sendable> {
             lastUpdatedAt = clock()
             lastError = nil
         } catch {
-            lastError = Self.webexStreamError(from: error)
+            lastError = WebexStreamErrorRedactor.webexStreamError(from: error)
         }
 
         isLoadingNextPage = false
@@ -305,7 +305,4 @@ private actor WebexSnapshotStreamState<Item: Sendable> {
         )
     }
 
-    private static func webexStreamError(from error: Error) -> WebexSDKError {
-        WebexStreamErrorRedactor.webexStreamError(from: error)
-    }
 }
