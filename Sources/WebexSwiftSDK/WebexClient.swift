@@ -7,6 +7,7 @@ public struct WebexClient: Sendable {
     public let memberships: MembershipsAPI
     public let messages: MessagesAPI
     public let teams: TeamsAPI
+    public let teamMemberships: TeamMembershipsAPI
     public let webhooks: WebhooksAPI
     public let realtime: WebexRealtimeClient
 
@@ -48,6 +49,7 @@ public struct WebexClient: Sendable {
         self.memberships = MembershipsAPI(transport: transport)
         self.messages = MessagesAPI(transport: transport)
         self.teams = TeamsAPI(transport: transport)
+        self.teamMemberships = TeamMembershipsAPI(transport: transport)
         self.webhooks = WebhooksAPI(transport: transport)
         self.realtime = WebexRealtimeClient(
             accountID: accountID,

@@ -177,6 +177,43 @@ final class TeamMembershipsAPITests: XCTestCase {
         XCTAssertTrue(requests.isEmpty)
     }
 
+    func testWebexClientExposesTeamMembershipsAPI() async throws {
+        let accountID = WebexAccountID()
+        let store = InMemoryWebexStore()
+        let httpClient = MockTeamMembershipsHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            body: #"{"id":"membership-1","teamId":"team-1","personId":"person-1"}"#
+        ))
+        let client = WebexClient(
+            accountID: accountID,
+            configuration: WebexIntegrationConfiguration(
+                clientID: "client",
+                clientSecret: "secret",
+                redirectURI: URL(string: "myapp://oauth/webex")!,
+                scopes: ["spark:teams_read"]
+            ),
+            tokenStore: store,
+            httpClient: httpClient,
+            initialAccessToken: AccessTokenState(
+                value: "client-token",
+                expiresAt: Date(timeIntervalSince1970: 1_000),
+                tokenType: "Bearer"
+            ),
+            clock: { Date(timeIntervalSince1970: 0) }
+        )
+
+        let membership = try await client.teamMemberships.get(teamMembershipID: "membership-1")
+
+        XCTAssertEqual(membership.teamID, "team-1")
+        let requests = await httpClient.recordedRequests()
+        XCTAssertEqual(
+            requests.first?.url?.absoluteString,
+            "https://webexapis.com/v1/team/memberships/membership-1"
+        )
+        XCTAssertEqual(requests.first?.value(forHTTPHeaderField: "Authorization"), "Bearer client-token")
+    }
+
     private func iso8601(_ date: Date?) -> String? {
         guard let date else {
             return nil
