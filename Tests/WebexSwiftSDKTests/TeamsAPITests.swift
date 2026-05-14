@@ -20,6 +20,33 @@ final class TeamsAPITests: XCTestCase {
         XCTAssertEqual(iso8601(team.created), "2026-05-08T10:11:12Z")
     }
 
+    func testTeamPreservesUnknownWireFields() throws {
+        let json = Data("""
+        {
+          "id": "team-id",
+          "name": "Platform Team",
+          "creatorId": "creator-id",
+          "created": "2026-05-08T10:11:12.123Z",
+          "color": "blue",
+          "description": "Incident response",
+          "archived": false,
+          "nested": { "flag": true }
+        }
+        """.utf8)
+
+        let team = try JSONDecoder().decode(WebexTeam.self, from: json)
+
+        XCTAssertEqual(team.id, "team-id")
+        XCTAssertEqual(team.additionalFields["color"], .string("blue"))
+        XCTAssertEqual(team.additionalFields["description"], .string("Incident response"))
+        XCTAssertEqual(team.additionalFields["archived"], .bool(false))
+        XCTAssertEqual(team.additionalFields["nested"], .object(["flag": .bool(true)]))
+        XCTAssertNil(team.additionalFields["id"])
+        XCTAssertNil(team.additionalFields["name"])
+        XCTAssertNil(team.additionalFields["creatorId"])
+        XCTAssertNil(team.additionalFields["created"])
+    }
+
     func testGetTeamPercentEncodesPathSegment() async throws {
         let httpClient = MockTeamsHTTPClient()
         await httpClient.enqueue(response: httpResponse(
