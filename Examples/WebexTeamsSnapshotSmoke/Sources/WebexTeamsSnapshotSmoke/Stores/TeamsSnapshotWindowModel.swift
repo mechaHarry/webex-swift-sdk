@@ -129,8 +129,8 @@ final class TeamsSnapshotWindowModel: ObservableObject {
     }
 
     private static func safeDescription(for error: Error) -> String {
-        if case WebexSDKError.invalidAuthorizationCallback = error {
-            return "Invalid authorization callback"
+        if case WebexSDKError.invalidAuthorizationCallback(let callback) = error {
+            return String(describing: WebexSDKError.invalidAuthorizationCallback(callback))
         }
 
         return String(describing: error)

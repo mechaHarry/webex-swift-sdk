@@ -87,14 +87,23 @@ final class TeamsSnapshotWindowModelTests: XCTestCase {
         XCTAssertEqual(runtime.loadNextPageCount, 1)
     }
 
-    func testStartFailureUsesSafeErrorText() async {
+    func testStartFailureUsesSafeRedactedErrorText() async {
         let model = TeamsSnapshotWindowModel(runtimeFactory: {
-            throw WebexSDKError.invalidAuthorizationCallback("code=secret")
+            throw WebexSDKError.invalidAuthorizationCallback(
+                "OAuth authorization error callback: error=invalid_scope; error_description=Scope spark:teams_read is invalid; code=secret"
+            )
         })
 
         await model.start()
 
-        XCTAssertEqual(model.phase, .failed("Invalid authorization callback"))
+        guard case .failed(let message) = model.phase else {
+            return XCTFail("Expected failed phase")
+        }
+        XCTAssertTrue(message.contains("Invalid authorization callback"))
+        XCTAssertTrue(message.contains("error=invalid_scope"))
+        XCTAssertTrue(message.contains("error_description=Scope spark:teams_read is invalid"))
+        XCTAssertFalse(message.contains("secret"))
+        XCTAssertTrue(message.contains("[redacted]"))
     }
 }
 

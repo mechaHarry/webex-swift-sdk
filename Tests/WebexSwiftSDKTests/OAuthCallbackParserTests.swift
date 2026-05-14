@@ -32,13 +32,15 @@ final class OAuthCallbackParserTests: XCTestCase {
         XCTAssertThrowsError(try OAuthCallbackParser.parse(callbackURL: callback, expectedState: "state123"))
     }
 
-    func testErrorCallbackThrowsWithoutLeakingCallbackDetails() {
-        let callback = URL(string: "myapp://oauth/webex?error=access_denied&state=state123")!
+    func testErrorCallbackThrowsWithSafeWebexErrorDetails() {
+        let callback = URL(string: "myapp://oauth/webex?error=invalid_scope&error_description=Scope%20spark%3Ateams_read%20is%20invalid&code=auth-code&state=state123")!
 
         XCTAssertThrowsError(try OAuthCallbackParser.parse(callbackURL: callback, expectedState: "state123")) { error in
             let description = String(describing: error)
 
-            XCTAssertFalse(description.contains("access_denied"))
+            XCTAssertTrue(description.contains("error=invalid_scope"))
+            XCTAssertTrue(description.contains("error_description=Scope spark:teams_read is invalid"))
+            XCTAssertFalse(description.contains("auth-code"))
             XCTAssertFalse(description.contains(callback.absoluteString))
             XCTAssertTrue(description.contains("Invalid authorization callback"))
         }

@@ -28,8 +28,15 @@ public enum OAuthCallbackParser {
             throw WebexSDKError.authorizationStateMismatch(expected: expectedState, actual: state)
         }
 
-        if queryItems.firstValue(named: "error") != nil {
-            throw WebexSDKError.invalidAuthorizationCallback("OAuth authorization error callback")
+        if let error = queryItems.firstValue(named: "error") {
+            var details = ["error=\(error)"]
+            if let errorDescription = queryItems.firstValue(named: "error_description"),
+               !errorDescription.isEmpty {
+                details.append("error_description=\(errorDescription)")
+            }
+            throw WebexSDKError.invalidAuthorizationCallback(
+                "OAuth authorization error callback: \(details.joined(separator: "; "))"
+            )
         }
 
         guard let code = queryItems.firstValue(named: "code"), !code.isEmpty else {
