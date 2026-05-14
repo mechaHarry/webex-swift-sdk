@@ -37,8 +37,9 @@ scope to `WEBEX_SCOPES`, update the Webex integration, and reauthorize.
 
 ```bash
 cd Examples/WebexSpacesEnrichedSnapshotSmoke
-export WEBEX_CLIENT_ID="..."
-export WEBEX_CLIENT_SECRET="..."
+cp source.sample.sh source.sh
+# Edit source.sh with your Webex integration credentials.
+source ./source.sh
 swift run WebexSpacesEnrichedSnapshotSmoke
 ```
 
