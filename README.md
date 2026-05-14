@@ -171,6 +171,9 @@ same implementation as `client.spaces`.
 Teams are available through `client.teams`. Use the documented Teams API for
 creating, listing, fetching, renaming, and deleting teams.
 
+Use `spark:teams_read` for list/get calls and `spark:teams_write` for
+create/update/delete calls.
+
 ```swift
 let team = try await client.teams.create(.init(name: "Incident Response"))
 let teams = try await client.teams.list(params: .init(max: 25))
@@ -179,11 +182,12 @@ let renamed = try await client.teams.update(
     teamID: team.id,
     .init(name: "Incident Response - Archive")
 )
-
-try await client.teams.delete(teamID: renamed.id)
 ```
 
 Team memberships are available through `client.teamMemberships`:
+
+Use `spark:team_memberships_read` for list/get calls and
+`spark:team_memberships_write` for create/update/delete calls.
 
 ```swift
 let member = try await client.teamMemberships.create(.init(
@@ -202,8 +206,9 @@ try await client.teamMemberships.delete(teamMembershipID: updatedMember.id)
 
 Team spaces use the existing Spaces API. List spaces for a team with
 `ListSpacesParams(teamID:)` or create a team space by setting `teamID` in
-`CreateSpaceRequest`. Webex does not document moving a space between teams or
-removing a space from a team after creation.
+`CreateSpaceRequest`. Team spaces still use the Spaces/Rooms scopes. Webex does
+not document moving a space between teams or removing a space from a team after
+creation.
 
 ```swift
 let teamSpaces = try await client.spaces.list(params: .init(teamID: team.id, max: 25))
@@ -211,6 +216,8 @@ let newTeamSpace = try await client.spaces.create(.init(
     title: "Incident Review",
     teamID: team.id
 ))
+
+try await client.teams.delete(teamID: renamed.id)
 ```
 
 `WebexTeam` and `WebexTeamMembership` preserve returned-but-undocumented JSON
