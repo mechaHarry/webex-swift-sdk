@@ -297,4 +297,5 @@ try await client.messages.delete(messageID: edited.id)
 - `Examples/WebexMessagesListSmoke`: interactive OAuth smoke test that lists Messages for `WEBEX_ROOM_ID` with explicit bounded pagination.
 - `Examples/WebexMessagesStreamWindowSmoke`: native SwiftUI smoke window that subscribes to `MessagesStream` snapshots and auto-refreshes the stream from realtime message triggers.
 - `Examples/WebexSpacesEnrichedSnapshotSmoke`: native SwiftUI smoke window that compares wire-faithful Spaces snapshot fields with SDK-derived `item.enriched` fields.
+- `Examples/WebexTeamsSnapshotSmoke`: native SwiftUI smoke window that displays `TeamsStream` snapshots and surfaces returned `WebexTeam.additionalFields` visually.
 - `Examples/WebexRealtimeEventsSmoke`: interactive OAuth or direct-token smoke test that connects to Webex realtime, validates granted realtime scopes in OAuth mode, and prints connection states/events.
