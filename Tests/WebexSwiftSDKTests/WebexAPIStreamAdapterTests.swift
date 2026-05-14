@@ -28,6 +28,106 @@ final class WebexAPIStreamAdapterTests: XCTestCase {
         ])
     }
 
+    func testSpacesStreamEnrichesTeamNameAndDirectSpaceAvatar() async throws {
+        let httpClient = StreamAdapterHTTPClient()
+        await httpClient.enqueue(
+            json: #"{"items":[{"id":"team-space","title":"Team Space","type":"group","teamId":"team-1"},{"id":"direct-space","title":"Direct","type":"direct"}]}"#
+        )
+        await httpClient.enqueue(json: #"{"id":"team-1","name":"Platform Team"}"#)
+        await httpClient.enqueue(json: #"{"id":"self","emails":["self@example.com"]}"#)
+        await httpClient.enqueue(json: #"{"items":[{"id":"m-self","roomId":"direct-space","personId":"self"},{"id":"m-other","roomId":"direct-space","personId":"other"}]}"#)
+        await httpClient.enqueue(json: #"{"id":"other","emails":["other@example.com"],"avatar":"https://example.com/other.png"}"#)
+
+        let stream = makeSpacesAPI(httpClient: httpClient)
+            .stream(params: .init(sortBy: .lastActivity, max: 2), pageLimit: 1)
+
+        await stream.refresh()
+
+        let snapshot = await stream.currentSnapshot()
+        XCTAssertEqual(snapshot.items.first(where: { $0.id == "team-space" })?.enriched.teamName, "Platform Team")
+        XCTAssertEqual(snapshot.items.first(where: { $0.id == "direct-space" })?.enriched.spaceAvatar, "https://example.com/other.png")
+        XCTAssertEqual(snapshot.items.map(\.enriched.status), [.complete, .complete])
+
+        let requestURLs = await httpClient.requestURLs
+        XCTAssertEqual(requestURLs, [
+            "https://webexapis.com/v1/rooms?sortBy=lastactivity&max=2",
+            "https://webexapis.com/v1/teams/team-1",
+            "https://webexapis.com/v1/people/me",
+            "https://webexapis.com/v1/memberships?roomId=direct-space",
+            "https://webexapis.com/v1/people/other"
+        ])
+    }
+
+    func testSpacesListReturnsEmptyEnrichmentWithoutFollowUpCalls() async throws {
+        let httpClient = StreamAdapterHTTPClient()
+        await httpClient.enqueue(
+            json: #"{"items":[{"id":"team-space","title":"Team Space","type":"group","teamId":"team-1"}]}"#
+        )
+
+        let page = try await makeSpacesAPI(httpClient: httpClient)
+            .list(params: .init(sortBy: .lastActivity, max: 1))
+
+        XCTAssertEqual(page.items.first?.enriched, .empty)
+        let requestURLs = await httpClient.requestURLs
+        XCTAssertEqual(requestURLs, [
+            "https://webexapis.com/v1/rooms?sortBy=lastactivity&max=1"
+        ])
+    }
+
+    func testSpacesGetReturnsEmptyEnrichmentWithoutFollowUpCalls() async throws {
+        let httpClient = StreamAdapterHTTPClient()
+        await httpClient.enqueue(
+            json: #"{"id":"team-space","title":"Team Space","type":"group","teamId":"team-1"}"#
+        )
+
+        let space = try await makeSpacesAPI(httpClient: httpClient)
+            .get(spaceID: "team-space")
+
+        XCTAssertEqual(space.enriched, .empty)
+        let requestURLs = await httpClient.requestURLs
+        XCTAssertEqual(requestURLs, [
+            "https://webexapis.com/v1/rooms/team-space"
+        ])
+    }
+
+    func testSpacesStreamEnrichmentFailureStaysOnItemAndDoesNotSetSnapshotLastError() async throws {
+        let httpClient = StreamAdapterHTTPClient()
+        await httpClient.enqueue(
+            json: #"{"items":[{"id":"team-space","title":"Team Space","type":"group","teamId":"team-1"}]}"#
+        )
+        await httpClient.enqueue(
+            json: #"{"message":"team lookup failed secret-access-token"}"#,
+            statusCode: 500
+        )
+        await httpClient.enqueue(
+            json: #"{"message":"team lookup failed secret-access-token"}"#,
+            statusCode: 500
+        )
+        await httpClient.enqueue(
+            json: #"{"message":"team lookup failed secret-access-token"}"#,
+            statusCode: 500
+        )
+
+        let stream = makeSpacesAPI(httpClient: httpClient)
+            .stream(params: .init(max: 1), pageLimit: 1)
+
+        await stream.refresh()
+
+        let snapshot = await stream.currentSnapshot()
+        let space = try XCTUnwrap(snapshot.items.first)
+        XCTAssertNil(snapshot.lastError)
+        XCTAssertEqual(space.enriched.status, .failed)
+        XCTAssertEqual(space.enriched.errors.first?.field, .teamName)
+        XCTAssertFalse(String(describing: space.enriched.errors.first?.error).contains("secret-access-token"))
+        let requestURLs = await httpClient.requestURLs
+        XCTAssertEqual(requestURLs, [
+            "https://webexapis.com/v1/rooms?max=1",
+            "https://webexapis.com/v1/teams/team-1",
+            "https://webexapis.com/v1/teams/team-1",
+            "https://webexapis.com/v1/teams/team-1"
+        ])
+    }
+
     func testMessagesStreamUsesMessagesListAndNextPage() async throws {
         let httpClient = StreamAdapterHTTPClient()
         await httpClient.enqueue(
@@ -117,13 +217,18 @@ private func makeMembershipsAPI(httpClient: HTTPClient) -> MembershipsAPI {
 }
 
 private func makeStreamAdapterTransport(httpClient: HTTPClient) -> WebexTransport {
-    WebexTransport(httpClient: httpClient) {
-        AccessTokenState(
-            value: "access-token",
-            expiresAt: Date(timeIntervalSince1970: 1_900_000_000),
-            tokenType: "Bearer"
-        )
-    }
+    WebexTransport(
+        httpClient: httpClient,
+        accessTokenProvider: {
+            AccessTokenState(
+                value: "access-token",
+                expiresAt: Date(timeIntervalSince1970: 1_900_000_000),
+                tokenType: "Bearer"
+            )
+        },
+        retryPolicy: RetryPolicy(maxAttempts: 3, baseDelay: 0, jitter: 0),
+        sleeper: { _ in }
+    )
 }
 
 private actor StreamAdapterHTTPClient: HTTPClient {

@@ -16,6 +16,50 @@ public enum WebexSpaceType: Equatable, Sendable {
     case unknown(String)
 }
 
+public enum WebexSpaceEnrichmentStatus: Equatable, Sendable {
+    case empty
+    case loading
+    case partial
+    case complete
+    case failed
+}
+
+public enum WebexSpaceEnrichmentField: Equatable, Sendable {
+    case teamName
+    case spaceAvatar
+}
+
+public struct WebexSpaceEnrichmentError: Equatable, Sendable {
+    public let field: WebexSpaceEnrichmentField
+    public let error: WebexSDKError
+
+    public init(field: WebexSpaceEnrichmentField, error: WebexSDKError) {
+        self.field = field
+        self.error = error
+    }
+}
+
+public struct WebexSpaceEnrichment: Equatable, Sendable {
+    public static let empty = WebexSpaceEnrichment()
+
+    public let teamName: String?
+    public let spaceAvatar: String?
+    public let status: WebexSpaceEnrichmentStatus
+    public let errors: [WebexSpaceEnrichmentError]
+
+    public init(
+        teamName: String? = nil,
+        spaceAvatar: String? = nil,
+        status: WebexSpaceEnrichmentStatus = .empty,
+        errors: [WebexSpaceEnrichmentError] = []
+    ) {
+        self.teamName = teamName
+        self.spaceAvatar = spaceAvatar
+        self.status = status
+        self.errors = errors
+    }
+}
+
 extension WebexSpaceType: Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -65,6 +109,7 @@ public struct WebexSpace: Equatable, Decodable, Sendable {
     public let classificationID: String?
     public let madePublic: Date?
     public let errors: [String: WebexPartialResourceError]?
+    public let enriched: WebexSpaceEnrichment
 
     public init(
         id: String,
@@ -82,7 +127,8 @@ public struct WebexSpace: Equatable, Decodable, Sendable {
         isAnnouncementOnly: Bool? = nil,
         classificationID: String? = nil,
         madePublic: Date? = nil,
-        errors: [String: WebexPartialResourceError]? = nil
+        errors: [String: WebexPartialResourceError]? = nil,
+        enriched: WebexSpaceEnrichment = .empty
     ) {
         self.id = id
         self.title = title
@@ -100,6 +146,7 @@ public struct WebexSpace: Equatable, Decodable, Sendable {
         self.classificationID = classificationID
         self.madePublic = madePublic
         self.errors = errors
+        self.enriched = enriched
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -139,6 +186,29 @@ public struct WebexSpace: Equatable, Decodable, Sendable {
         self.classificationID = try container.decodeIfPresent(String.self, forKey: .classificationID)
         self.madePublic = try WebexDateDecoding.decodeIfPresent(from: container, forKey: .madePublic)
         self.errors = try container.decodeIfPresent([String: WebexPartialResourceError].self, forKey: .errors)
+        self.enriched = .empty
+    }
+
+    func replacingEnrichment(_ enrichment: WebexSpaceEnrichment) -> WebexSpace {
+        WebexSpace(
+            id: id,
+            title: title,
+            type: type,
+            isLocked: isLocked,
+            teamID: teamID,
+            lastActivity: lastActivity,
+            creatorID: creatorID,
+            created: created,
+            ownerID: ownerID,
+            description: description,
+            isPublic: isPublic,
+            isReadOnly: isReadOnly,
+            isAnnouncementOnly: isAnnouncementOnly,
+            classificationID: classificationID,
+            madePublic: madePublic,
+            errors: errors,
+            enriched: enrichment
+        )
     }
 }
 

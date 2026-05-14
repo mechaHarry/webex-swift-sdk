@@ -71,12 +71,15 @@ public final class WebexSnapshotStream<Item: Sendable>: @unchecked Sendable {
         let state = state
         return AsyncStream { continuation in
             let id = UUID()
-            Task {
+            let subscribeTask = Task {
                 await state.subscribe(id: id, continuation: continuation)
             }
             continuation.onTermination = { @Sendable _ in
+                subscribeTask.cancel()
                 Task {
+                    await subscribeTask.value
                     await state.unsubscribe(id: id)
+                    await state.cancelPendingSubscribe(id: id)
                 }
             }
         }
@@ -108,6 +111,21 @@ public final class WebexSnapshotStream<Item: Sendable>: @unchecked Sendable {
 
     public func loadNextPage() async {
         await state.loadNextPage()
+    }
+
+    func replaceItems(
+        _ items: [Item],
+        incrementRevision: Bool = true
+    ) async {
+        await state.replaceItems(items, incrementRevision: incrementRevision)
+    }
+
+    func subscriberCount() async -> Int {
+        await state.subscriberCount()
+    }
+
+    func subscriptionTombstoneCount() async -> Int {
+        await state.subscriptionTombstoneCount()
     }
 
     public func refreshOnTriggers(
@@ -142,6 +160,7 @@ private actor WebexSnapshotStreamState<Item: Sendable> {
     private let loadNextPage: @Sendable (WebexPageLink) async throws -> WebexStreamPage<Item>
 
     private var continuations: [UUID: AsyncStream<WebexStreamSnapshot<Item>>.Continuation] = [:]
+    private var terminatedSubscriptionIDs: Set<UUID> = []
     private var items: [Item] = []
     private var revision: UInt64 = 0
     private var lastUpdatedAt: Date?
@@ -169,20 +188,39 @@ private actor WebexSnapshotStreamState<Item: Sendable> {
         id: UUID,
         continuation: AsyncStream<WebexStreamSnapshot<Item>>.Continuation
     ) {
+        guard terminatedSubscriptionIDs.remove(id) == nil else {
+            return
+        }
+
         continuations[id] = continuation
         continuation.yield(makeSnapshot())
     }
 
     func unsubscribe(id: UUID) {
-        continuations[id] = nil
+        if continuations.removeValue(forKey: id) == nil {
+            terminatedSubscriptionIDs.insert(id)
+        }
+    }
+
+    func cancelPendingSubscribe(id: UUID) {
+        terminatedSubscriptionIDs.remove(id)
     }
 
     func currentSnapshot() -> WebexStreamSnapshot<Item> {
         makeSnapshot()
     }
 
+    func subscriberCount() -> Int {
+        continuations.count
+    }
+
+    func subscriptionTombstoneCount() -> Int {
+        terminatedSubscriptionIDs.count
+    }
+
     func refresh() async {
-        guard !isRefreshing else {
+        guard !Task.isCancelled,
+              !isRefreshing else {
             return
         }
 
@@ -192,22 +230,48 @@ private actor WebexSnapshotStreamState<Item: Sendable> {
 
         do {
             let page = try await loadFirstPage()
+            guard !Task.isCancelled else {
+                isRefreshing = false
+                emitSnapshot()
+                return
+            }
             items = page.items
             nextPage = page.nextPage
             pagesLoaded = 1
             revision += 1
             lastUpdatedAt = clock()
             lastError = nil
+        } catch is CancellationError {
+            isRefreshing = false
+            emitSnapshot()
+            return
         } catch {
-            lastError = Self.webexStreamError(from: error)
+            guard !Task.isCancelled else {
+                isRefreshing = false
+                emitSnapshot()
+                return
+            }
+            lastError = WebexStreamErrorRedactor.webexStreamError(from: error)
         }
 
         isRefreshing = false
         emitSnapshot()
     }
 
+    func replaceItems(
+        _ newItems: [Item],
+        incrementRevision: Bool
+    ) {
+        items = newItems
+        if incrementRevision {
+            revision += 1
+        }
+        emitSnapshot()
+    }
+
     func loadNextPage() async {
-        guard !isRefreshing,
+        guard !Task.isCancelled,
+              !isRefreshing,
               !isLoadingNextPage,
               !isPageCapReached,
               let nextPage else {
@@ -220,14 +284,28 @@ private actor WebexSnapshotStreamState<Item: Sendable> {
 
         do {
             let page = try await loadNextPage(nextPage)
+            guard !Task.isCancelled else {
+                isLoadingNextPage = false
+                emitSnapshot()
+                return
+            }
             items = mergedItems(existing: items, incoming: page.items)
             self.nextPage = page.nextPage
             pagesLoaded += 1
             revision += 1
             lastUpdatedAt = clock()
             lastError = nil
+        } catch is CancellationError {
+            isLoadingNextPage = false
+            emitSnapshot()
+            return
         } catch {
-            lastError = Self.webexStreamError(from: error)
+            guard !Task.isCancelled else {
+                isLoadingNextPage = false
+                emitSnapshot()
+                return
+            }
+            lastError = WebexStreamErrorRedactor.webexStreamError(from: error)
         }
 
         isLoadingNextPage = false
@@ -287,50 +365,4 @@ private actor WebexSnapshotStreamState<Item: Sendable> {
         )
     }
 
-    private static func webexStreamError(from error: Error) -> WebexSDKError {
-        switch error {
-        case let sdkError as WebexSDKError:
-            return redacted(sdkError)
-        default:
-            return .network(Redactor.redactOAuthCallback(error.localizedDescription))
-        }
-    }
-
-    private static func redacted(_ error: WebexSDKError) -> WebexSDKError {
-        switch error {
-        case .invalidAccountID(let rawValue):
-            return .invalidAccountID(Redactor.redactSecrets(rawValue))
-        case .invalidAuthorizationCallback(let callback):
-            return .invalidAuthorizationCallback(Redactor.redactOAuthCallback(callback))
-        case .authorizationStateMismatch,
-             .userCancelledAuthorization,
-             .missingCredential,
-             .missingRefreshToken,
-             .reauthenticationRequired,
-             .rateLimited:
-            return error
-        case .duplicateAccount(let existing, let reason):
-            return .duplicateAccount(existing: existing, reason: Redactor.redactSecrets(reason))
-        case .tokenExchangeFailed(let statusCode, let message, let trackingID):
-            return .tokenExchangeFailed(
-                statusCode: statusCode,
-                message: Redactor.redactSecrets(message),
-                trackingID: trackingID.map(Redactor.redactSecrets)
-            )
-        case .locked(let retryAfter, let trackingID, let message):
-            return .locked(
-                retryAfter: retryAfter,
-                trackingID: trackingID.map(Redactor.redactSecrets),
-                message: Redactor.redactSecrets(message)
-            )
-        case .webexAPI(let statusCode, let trackingID, let message):
-            return .webexAPI(
-                statusCode: statusCode,
-                trackingID: trackingID.map(Redactor.redactSecrets),
-                message: Redactor.redactSecrets(message)
-            )
-        case .network(let message):
-            return .network(Redactor.redactOAuthCallback(message))
-        }
-    }
 }

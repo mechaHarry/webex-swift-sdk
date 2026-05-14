@@ -129,7 +129,7 @@ public struct UpdateSpaceRequest: Encodable, Equatable, Sendable {
 }
 
 public struct SpacesAPI: Sendable {
-    private let transport: WebexTransport
+    let transport: WebexTransport
 
     public init(transport: WebexTransport) {
         self.transport = transport
