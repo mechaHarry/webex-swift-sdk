@@ -221,6 +221,90 @@ final class TeamsAPITests: XCTestCase {
         )
     }
 
+    func testTeamsStreamRefreshLoadsFirstPageAndPreservesAdditionalFields() async throws {
+        let httpClient = MockTeamsHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            headers: [
+                "Link": #"<https://webexapis.com/v1/teams?cursor=next>; rel="next""#
+            ],
+            body: #"{"items":[{"id":"team-1","name":"One","color":"blue"}]}"#
+        ))
+        let api = makeAPI(httpClient: httpClient)
+        let stream = api.stream(params: ListTeamsParams(max: 1), pageLimit: 2)
+
+        var iterator = stream.snapshots.makeAsyncIterator()
+        _ = try await nextTeamSnapshot(from: &iterator)
+
+        let refresh = Task { await stream.refresh() }
+        let loaded = try await nextTeamSnapshot(from: &iterator) { !$0.isRefreshing }
+        await refresh.value
+
+        XCTAssertEqual(loaded.items.map(\.id), ["team-1"])
+        XCTAssertEqual(loaded.items.first?.name, "One")
+        XCTAssertEqual(loaded.items.first?.additionalFields["color"], .string("blue"))
+        XCTAssertTrue(loaded.pagination.hasMore)
+        XCTAssertEqual(loaded.pagination.pageLimit, 2)
+        let requests = await httpClient.recordedRequests()
+        XCTAssertEqual(requests.first?.url?.absoluteString, "https://webexapis.com/v1/teams?max=1")
+    }
+
+    func testTeamsStreamLoadNextPageAppendsUniqueTeamsByID() async throws {
+        let httpClient = MockTeamsHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            headers: [
+                "Link": #"<https://webexapis.com/v1/teams?cursor=next>; rel="next""#
+            ],
+            body: #"{"items":[{"id":"team-1","name":"Original"}]}"#
+        ))
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            body: #"{"items":[{"id":"team-1","name":"Updated"},{"id":"team-2","name":"Second"}]}"#
+        ))
+        let api = makeAPI(httpClient: httpClient)
+        let stream = api.stream(params: ListTeamsParams(max: 1))
+
+        var iterator = stream.snapshots.makeAsyncIterator()
+        _ = try await nextTeamSnapshot(from: &iterator)
+
+        let refresh = Task { await stream.refresh() }
+        _ = try await nextTeamSnapshot(from: &iterator) { !$0.isRefreshing && !$0.items.isEmpty }
+        await refresh.value
+
+        let nextPage = Task { await stream.loadNextPage() }
+        let loaded = try await nextTeamSnapshot(from: &iterator) {
+            !$0.isLoadingNextPage && $0.items.map(\.id) == ["team-1", "team-2"]
+        }
+        await nextPage.value
+
+        XCTAssertEqual(loaded.items.map(\.id), ["team-1", "team-2"])
+        XCTAssertEqual(loaded.items.first?.name, "Updated")
+        XCTAssertFalse(loaded.pagination.hasMore)
+        let requests = await httpClient.recordedRequests()
+        XCTAssertEqual(
+            requests.map { $0.url?.absoluteString },
+            [
+                "https://webexapis.com/v1/teams?max=1",
+                "https://webexapis.com/v1/teams?cursor=next"
+            ]
+        )
+    }
+
+    private func nextTeamSnapshot(
+        from iterator: inout AsyncStream<WebexStreamSnapshot<WebexTeam>>.Iterator,
+        matching predicate: (WebexStreamSnapshot<WebexTeam>) -> Bool = { _ in true }
+    ) async throws -> WebexStreamSnapshot<WebexTeam> {
+        for _ in 0..<10 {
+            if let snapshot = await iterator.next(), predicate(snapshot) {
+                return snapshot
+            }
+        }
+        XCTFail("Timed out waiting for matching teams stream snapshot")
+        let snapshot = await iterator.next()
+        return try XCTUnwrap(snapshot)
+    }
+
     private func iso8601(_ date: Date?) -> String? {
         guard let date else {
             return nil
