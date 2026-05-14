@@ -166,6 +166,65 @@ try await client.spaces.delete(spaceID: updated.id)
 For developers following Webex's endpoint reference, `client.rooms` maps to the
 same implementation as `client.spaces`.
 
+## Teams
+
+Teams are available through `client.teams`. Use the documented Teams API for
+creating, listing, fetching, renaming, and deleting teams.
+
+Use `spark:teams_read` for list/get calls and `spark:teams_write` for
+create/update/delete calls.
+
+```swift
+let team = try await client.teams.create(.init(name: "Incident Response"))
+let teams = try await client.teams.list(params: .init(max: 25))
+
+let renamed = try await client.teams.update(
+    teamID: team.id,
+    .init(name: "Incident Response - Archive")
+)
+```
+
+Team memberships are available through `client.teamMemberships`:
+
+Use `spark:team_memberships_read` for list/get calls and
+`spark:team_memberships_write` for create/update/delete calls.
+
+```swift
+let member = try await client.teamMemberships.create(.init(
+    teamID: team.id,
+    personEmail: "person@example.com",
+    isModerator: true
+))
+
+let members = try await client.teamMemberships.list(params: .init(teamID: team.id, max: 50))
+let updatedMember = try await client.teamMemberships.update(
+    teamMembershipID: member.id,
+    .init(isModerator: false)
+)
+try await client.teamMemberships.delete(teamMembershipID: updatedMember.id)
+```
+
+Team spaces use the existing Spaces API. List spaces for a team with
+`ListSpacesParams(teamID:)` or create a team space by setting `teamID` in
+`CreateSpaceRequest`. Team spaces still use the Spaces/Rooms scopes. Webex does
+not document moving a space between teams or removing a space from a team after
+creation.
+
+```swift
+let teamSpaces = try await client.spaces.list(params: .init(teamID: team.id, max: 25))
+let newTeamSpace = try await client.spaces.create(.init(
+    title: "Incident Review",
+    teamID: team.id
+))
+
+try await client.teams.delete(teamID: renamed.id)
+```
+
+`WebexTeam` and `WebexTeamMembership` preserve returned-but-undocumented JSON
+fields in `additionalFields`. This is useful for inspecting wire-faithful
+metadata such as future visual or lifecycle fields, but the SDK only exposes
+documented team writes as typed request properties.
+
 ## Memberships
 
 Memberships manage who belongs to a Webex space and whether a member is a
@@ -238,4 +297,5 @@ try await client.messages.delete(messageID: edited.id)
 - `Examples/WebexMessagesListSmoke`: interactive OAuth smoke test that lists Messages for `WEBEX_ROOM_ID` with explicit bounded pagination.
 - `Examples/WebexMessagesStreamWindowSmoke`: native SwiftUI smoke window that subscribes to `MessagesStream` snapshots and auto-refreshes the stream from realtime message triggers.
 - `Examples/WebexSpacesEnrichedSnapshotSmoke`: native SwiftUI smoke window that compares wire-faithful Spaces snapshot fields with SDK-derived `item.enriched` fields.
+- `Examples/WebexTeamsSnapshotSmoke`: native SwiftUI smoke window that displays `TeamsStream` snapshots and surfaces returned `WebexTeam.additionalFields` visually.
 - `Examples/WebexRealtimeEventsSmoke`: interactive OAuth or direct-token smoke test that connects to Webex realtime, validates granted realtime scopes in OAuth mode, and prints connection states/events.

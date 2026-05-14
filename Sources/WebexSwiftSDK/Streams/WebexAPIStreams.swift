@@ -2,6 +2,7 @@ import Foundation
 
 public typealias MessagesStream = WebexSnapshotStream<WebexMessage>
 public typealias MembershipsStream = WebexSnapshotStream<WebexMembership>
+public typealias TeamsStream = WebexSnapshotStream<WebexTeam>
 
 public extension SpacesAPI {
     func stream(
@@ -68,6 +69,26 @@ public extension MessagesAPI {
         pageLimit: Int? = nil
     ) -> MessagesThreadStream {
         MessagesThreadStream(flatStream: stream(params: params, pageLimit: pageLimit))
+    }
+}
+
+public extension TeamsAPI {
+    func stream(
+        params: ListTeamsParams = ListTeamsParams(),
+        pageLimit: Int? = nil
+    ) -> TeamsStream {
+        WebexSnapshotStream(
+            pageLimit: pageLimit,
+            id: { $0.id },
+            loadFirstPage: {
+                let page = try await list(params: params)
+                return WebexStreamPage(items: page.items, nextPage: page.nextPage)
+            },
+            loadNextPage: { nextPage in
+                let page = try await list(nextPage: nextPage)
+                return WebexStreamPage(items: page.items, nextPage: page.nextPage)
+            }
+        )
     }
 }
 
