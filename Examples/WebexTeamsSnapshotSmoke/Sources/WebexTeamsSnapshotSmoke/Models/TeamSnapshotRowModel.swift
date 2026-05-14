@@ -13,7 +13,7 @@ struct TeamSnapshotRowModel: Equatable, Identifiable {
         self.title = Self.display(team.name, fallback: "(unnamed team)")
         self.shortID = Self.shortID(team.id)
         self.createdText = Self.date(team.created)
-        self.additionalFieldsText = "\(team.additionalFields.count) extra fields"
+        self.additionalFieldsText = Self.additionalFieldsText(count: team.additionalFields.count)
     }
 
     private static func display(_ value: String?, fallback: String) -> String {
@@ -30,6 +30,10 @@ struct TeamSnapshotRowModel: Equatable, Identifiable {
         }
 
         return "\(id.prefix(8))..."
+    }
+
+    private static func additionalFieldsText(count: Int) -> String {
+        count == 1 ? "1 extra field" : "\(count) extra fields"
     }
 
     private static func date(_ date: Date?) -> String {

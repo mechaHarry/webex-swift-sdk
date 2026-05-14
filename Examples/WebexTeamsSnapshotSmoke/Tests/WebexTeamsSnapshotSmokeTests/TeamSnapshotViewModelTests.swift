@@ -32,6 +32,17 @@ final class TeamSnapshotViewModelTests: XCTestCase {
         XCTAssertEqual(row.additionalFieldsText, "0 extra fields")
     }
 
+    func testRowModelUsesSingularAdditionalFieldText() {
+        let row = TeamSnapshotRowModel(
+            team: WebexTeam(
+                id: "team-1",
+                additionalFields: ["color": .string("blue")]
+            )
+        )
+
+        XCTAssertEqual(row.additionalFieldsText, "1 extra field")
+    }
+
     func testDetailModelRendersDocumentedAndAdditionalFieldsSortedByKey() {
         let team = WebexTeam(
             id: "team-1",
