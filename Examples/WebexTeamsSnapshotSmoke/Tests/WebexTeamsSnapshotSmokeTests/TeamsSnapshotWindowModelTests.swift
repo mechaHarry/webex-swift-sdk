@@ -66,6 +66,11 @@ final class TeamsSnapshotWindowModelTests: XCTestCase {
         let model = TeamsSnapshotWindowModel(runtimeFactory: { runtime.runtime })
 
         await model.start()
+        await model.loadNextPage()
+
+        XCTAssertFalse(model.canLoadMore)
+        XCTAssertEqual(runtime.loadNextPageCount, 0)
+
         runtime.yield(snapshot(
             items: [WebexTeam(id: "team-1", name: "One")],
             revision: 1,
