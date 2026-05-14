@@ -121,6 +121,106 @@ final class TeamsAPITests: XCTestCase {
         XCTAssertEqual(requests.first?.value(forHTTPHeaderField: "Authorization"), "Bearer client-token")
     }
 
+    func testListTeamsSendsParamsAndDecodesPage() async throws {
+        let httpClient = MockTeamsHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            headers: [
+                "Link": #"<https://webexapis.com/v1/teams?cursor=next>; rel="next""#
+            ],
+            body: #"{"items":[{"id":"team-1","name":"One"},{"id":"team-2","name":"Two"}]}"#
+        ))
+        let api = makeAPI(httpClient: httpClient)
+
+        let page = try await api.list(params: ListTeamsParams(max: 2))
+
+        XCTAssertEqual(page.items.map(\.id), ["team-1", "team-2"])
+        XCTAssertNotNil(page.nextPage)
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.url?.absoluteString, "https://webexapis.com/v1/teams?max=2")
+    }
+
+    func testListTeamsNextPageUsesParsedWebexPageLink() async throws {
+        let httpClient = MockTeamsHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            body: #"{"items":[{"id":"team-2","name":"Two"}]}"#
+        ))
+        let api = makeAPI(httpClient: httpClient)
+        let nextPage = WebexPageLink(url: URL(string: "https://webexapis.com/v1/teams?cursor=next")!)
+
+        let page = try await api.list(nextPage: nextPage)
+
+        XCTAssertEqual(page.items.map(\.id), ["team-2"])
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.url?.absoluteString, "https://webexapis.com/v1/teams?cursor=next")
+    }
+
+    func testCreateTeamPostsDocumentedJSON() async throws {
+        let httpClient = MockTeamsHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            body: #"{"id":"team-1","name":"Created"}"#
+        ))
+        let api = makeAPI(httpClient: httpClient)
+
+        let team = try await api.create(CreateTeamRequest(name: "Created"))
+
+        XCTAssertEqual(team.name, "Created")
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.absoluteString, "https://webexapis.com/v1/teams")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any])
+        XCTAssertEqual(json["name"] as? String, "Created")
+        XCTAssertNil(json["color"])
+        XCTAssertNil(json["description"])
+    }
+
+    func testUpdateTeamPutsDocumentedJSON() async throws {
+        let httpClient = MockTeamsHTTPClient()
+        await httpClient.enqueue(response: httpResponse(
+            statusCode: 200,
+            body: #"{"id":"team/id with spaces","name":"Renamed"}"#
+        ))
+        let api = makeAPI(httpClient: httpClient)
+
+        let team = try await api.update(
+            teamID: "team/id with spaces",
+            UpdateTeamRequest(name: "Renamed")
+        )
+
+        XCTAssertEqual(team.name, "Renamed")
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.httpMethod, "PUT")
+        XCTAssertEqual(
+            request.url?.absoluteString,
+            "https://webexapis.com/v1/teams/team%2Fid%20with%20spaces"
+        )
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any])
+        XCTAssertEqual(json["name"] as? String, "Renamed")
+    }
+
+    func testDeleteTeamSendsDelete() async throws {
+        let httpClient = MockTeamsHTTPClient()
+        await httpClient.enqueue(response: httpResponse(statusCode: 204, body: ""))
+        let api = makeAPI(httpClient: httpClient)
+
+        try await api.delete(teamID: "team/id with spaces")
+
+        let requests = await httpClient.recordedRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.httpMethod, "DELETE")
+        XCTAssertEqual(
+            request.url?.absoluteString,
+            "https://webexapis.com/v1/teams/team%2Fid%20with%20spaces"
+        )
+    }
+
     private func iso8601(_ date: Date?) -> String? {
         guard let date else {
             return nil
