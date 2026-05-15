@@ -109,6 +109,7 @@ public struct WebexSpace: Equatable, Decodable, Sendable {
     public let classificationID: String?
     public let madePublic: Date?
     public let errors: [String: WebexPartialResourceError]?
+    public let additionalFields: [String: WebexJSONValue]
     public let enriched: WebexSpaceEnrichment
 
     public init(
@@ -128,6 +129,7 @@ public struct WebexSpace: Equatable, Decodable, Sendable {
         classificationID: String? = nil,
         madePublic: Date? = nil,
         errors: [String: WebexPartialResourceError]? = nil,
+        additionalFields: [String: WebexJSONValue] = [:],
         enriched: WebexSpaceEnrichment = .empty
     ) {
         self.id = id
@@ -146,10 +148,11 @@ public struct WebexSpace: Equatable, Decodable, Sendable {
         self.classificationID = classificationID
         self.madePublic = madePublic
         self.errors = errors
+        self.additionalFields = additionalFields
         self.enriched = enriched
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case id
         case title
         case type
@@ -186,6 +189,10 @@ public struct WebexSpace: Equatable, Decodable, Sendable {
         self.classificationID = try container.decodeIfPresent(String.self, forKey: .classificationID)
         self.madePublic = try WebexDateDecoding.decodeIfPresent(from: container, forKey: .madePublic)
         self.errors = try container.decodeIfPresent([String: WebexPartialResourceError].self, forKey: .errors)
+        self.additionalFields = try WebexAdditionalFields.decode(
+            from: decoder,
+            excluding: Set(CodingKeys.allCases.map(\.rawValue))
+        )
         self.enriched = .empty
     }
 
@@ -207,6 +214,7 @@ public struct WebexSpace: Equatable, Decodable, Sendable {
             classificationID: classificationID,
             madePublic: madePublic,
             errors: errors,
+            additionalFields: additionalFields,
             enriched: enrichment
         )
     }

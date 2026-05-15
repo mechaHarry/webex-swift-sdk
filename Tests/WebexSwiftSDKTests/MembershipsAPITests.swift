@@ -15,6 +15,10 @@ final class MembershipsAPITests: XCTestCase {
           "isModerator": true,
           "isMonitor": false,
           "isRoomHidden": true,
+          "source": "directory",
+          "flags": {
+            "hiddenReason": "user"
+          },
           "created": "2026-05-01T10:11:12.123Z"
         }
         """.utf8)
@@ -31,6 +35,10 @@ final class MembershipsAPITests: XCTestCase {
         XCTAssertEqual(membership.isModerator, true)
         XCTAssertEqual(membership.isMonitor, false)
         XCTAssertEqual(membership.isRoomHidden, true)
+        XCTAssertEqual(membership.additionalFields["source"], .string("directory"))
+        XCTAssertEqual(membership.additionalFields["flags"], .object(["hiddenReason": .string("user")]))
+        XCTAssertNil(membership.additionalFields["id"])
+        XCTAssertNil(membership.additionalFields["roomId"])
         XCTAssertEqual(iso8601(membership.created), "2026-05-01T10:11:12Z")
     }
 

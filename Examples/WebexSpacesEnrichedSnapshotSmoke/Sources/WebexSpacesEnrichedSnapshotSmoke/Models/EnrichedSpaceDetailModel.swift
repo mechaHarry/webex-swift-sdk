@@ -29,7 +29,7 @@ struct EnrichedSpaceDetailModel: Equatable, Identifiable {
             FieldDisplay(name: "isAnnouncementOnly", value: Self.optionalBool(space.isAnnouncementOnly)),
             FieldDisplay(name: "lastActivity", value: Self.iso8601(space.lastActivity)),
             FieldDisplay(name: "created", value: Self.iso8601(space.created))
-        ]
+        ] + Self.additionalFields(space.additionalFields)
         self.enrichedFields = [
             FieldDisplay(name: "enriched.teamName", value: Self.optional(space.enriched.teamName)),
             FieldDisplay(name: "enriched.spaceAvatar", value: Self.optional(space.enriched.spaceAvatar)),
@@ -89,6 +89,27 @@ struct EnrichedSpaceDetailModel: Equatable, Identifiable {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.string(from: date)
+    }
+
+    private static func additionalFields(_ fields: [String: WebexJSONValue]) -> [FieldDisplay] {
+        fields.keys.sorted().map { key in
+            FieldDisplay(
+                name: "additionalFields.\(key)",
+                value: jsonText(fields[key] ?? .null)
+            )
+        }
+    }
+
+    private static func jsonText(_ value: WebexJSONValue) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+
+        guard let data = try? encoder.encode(value),
+              let text = String(data: data, encoding: .utf8) else {
+            return "(unencodable)"
+        }
+
+        return text
     }
 
     private static func errors(_ errors: [WebexSpaceEnrichmentError]) -> String {

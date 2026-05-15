@@ -32,6 +32,7 @@ public struct WebexMessage: Equatable, Decodable, Sendable {
     public let created: Date?
     public let updated: Date?
     public let isVoiceClip: Bool?
+    public let additionalFields: [String: WebexJSONValue]
 
     public init(
         id: String,
@@ -51,7 +52,8 @@ public struct WebexMessage: Equatable, Decodable, Sendable {
         attachments: [WebexMessageAttachment]? = nil,
         created: Date? = nil,
         updated: Date? = nil,
-        isVoiceClip: Bool? = nil
+        isVoiceClip: Bool? = nil,
+        additionalFields: [String: WebexJSONValue] = [:]
     ) {
         self.id = id
         self.parentID = parentID
@@ -71,9 +73,10 @@ public struct WebexMessage: Equatable, Decodable, Sendable {
         self.created = created
         self.updated = updated
         self.isVoiceClip = isVoiceClip
+        self.additionalFields = additionalFields
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case id
         case parentID = "parentId"
         case roomID = "roomId"
@@ -114,5 +117,9 @@ public struct WebexMessage: Equatable, Decodable, Sendable {
         self.created = try WebexDateDecoding.decodeIfPresent(from: container, forKey: .created)
         self.updated = try WebexDateDecoding.decodeIfPresent(from: container, forKey: .updated)
         self.isVoiceClip = try container.decodeIfPresent(Bool.self, forKey: .isVoiceClip)
+        self.additionalFields = try WebexAdditionalFields.decode(
+            from: decoder,
+            excluding: Set(CodingKeys.allCases.map(\.rawValue))
+        )
     }
 }

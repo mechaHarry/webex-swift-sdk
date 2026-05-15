@@ -294,6 +294,7 @@ public struct WebexPerson: Equatable, Decodable, Sendable {
     public let invitePending: String?
     public let loginEnabled: String?
     public let type: WebexPersonType?
+    public let additionalFields: [String: WebexJSONValue]
 
     public init(
         id: String,
@@ -324,7 +325,8 @@ public struct WebexPerson: Equatable, Decodable, Sendable {
         status: WebexPersonStatus? = nil,
         invitePending: String? = nil,
         loginEnabled: String? = nil,
-        type: WebexPersonType? = nil
+        type: WebexPersonType? = nil,
+        additionalFields: [String: WebexJSONValue] = [:]
     ) {
         self.id = id
         self.emails = emails
@@ -355,9 +357,10 @@ public struct WebexPerson: Equatable, Decodable, Sendable {
         self.invitePending = invitePending
         self.loginEnabled = loginEnabled
         self.type = type
+        self.additionalFields = additionalFields
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case id
         case emails
         case phoneNumbers
@@ -420,6 +423,10 @@ public struct WebexPerson: Equatable, Decodable, Sendable {
         self.invitePending = try container.decodeIfPresent(String.self, forKey: .invitePending)
         self.loginEnabled = try container.decodeIfPresent(String.self, forKey: .loginEnabled)
         self.type = try container.decodeIfPresent(WebexPersonType.self, forKey: .type)
+        self.additionalFields = try WebexAdditionalFields.decode(
+            from: decoder,
+            excluding: Set(CodingKeys.allCases.map(\.rawValue))
+        )
     }
 }
 

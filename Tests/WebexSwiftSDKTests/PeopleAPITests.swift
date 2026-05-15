@@ -79,7 +79,11 @@ final class PeopleAPITests: XCTestCase {
           "status": "active",
           "invitePending": "false",
           "loginEnabled": "true",
-          "type": "person"
+          "type": "person",
+          "pronouns": "she/her",
+          "customProfile": {
+            "costCenter": "eng"
+          }
         }
         """.utf8)
 
@@ -132,6 +136,10 @@ final class PeopleAPITests: XCTestCase {
         XCTAssertEqual(person.invitePending, "false")
         XCTAssertEqual(person.loginEnabled, "true")
         XCTAssertEqual(person.type, .person)
+        XCTAssertEqual(person.additionalFields["pronouns"], .string("she/her"))
+        XCTAssertEqual(person.additionalFields["customProfile"], .object(["costCenter": .string("eng")]))
+        XCTAssertNil(person.additionalFields["id"])
+        XCTAssertNil(person.additionalFields["emails"])
     }
 
     func testPersonStatusPreservesUnknownValues() throws {

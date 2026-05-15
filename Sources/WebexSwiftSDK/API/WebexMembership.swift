@@ -12,6 +12,7 @@ public struct WebexMembership: Equatable, Decodable, Sendable {
     public let isMonitor: Bool?
     public let isRoomHidden: Bool?
     public let created: Date?
+    public let additionalFields: [String: WebexJSONValue]
 
     public init(
         id: String,
@@ -24,7 +25,8 @@ public struct WebexMembership: Equatable, Decodable, Sendable {
         isModerator: Bool? = nil,
         isMonitor: Bool? = nil,
         isRoomHidden: Bool? = nil,
-        created: Date? = nil
+        created: Date? = nil,
+        additionalFields: [String: WebexJSONValue] = [:]
     ) {
         self.id = id
         self.roomID = roomID
@@ -37,9 +39,10 @@ public struct WebexMembership: Equatable, Decodable, Sendable {
         self.isMonitor = isMonitor
         self.isRoomHidden = isRoomHidden
         self.created = created
+        self.additionalFields = additionalFields
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case id
         case roomID = "roomId"
         case roomType
@@ -66,5 +69,9 @@ public struct WebexMembership: Equatable, Decodable, Sendable {
         self.isMonitor = try container.decodeIfPresent(Bool.self, forKey: .isMonitor)
         self.isRoomHidden = try container.decodeIfPresent(Bool.self, forKey: .isRoomHidden)
         self.created = try WebexDateDecoding.decodeIfPresent(from: container, forKey: .created)
+        self.additionalFields = try WebexAdditionalFields.decode(
+            from: decoder,
+            excluding: Set(CodingKeys.allCases.map(\.rawValue))
+        )
     }
 }

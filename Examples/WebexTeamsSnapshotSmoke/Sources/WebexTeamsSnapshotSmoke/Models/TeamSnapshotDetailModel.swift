@@ -75,7 +75,7 @@ struct TeamSnapshotDetailModel: Equatable, Identifiable {
 
     private static func jsonText(_ value: WebexJSONValue) -> String {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
 
         guard let data = try? encoder.encode(value),
               let text = String(data: data, encoding: .utf8) else {

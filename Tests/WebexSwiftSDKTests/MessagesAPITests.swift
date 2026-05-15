@@ -44,7 +44,11 @@ final class MessagesAPITests: XCTestCase {
           ],
           "created": "2026-05-01T18:01:02.123Z",
           "updated": "2026-05-01T19:03:04Z",
-          "isVoiceClip": true
+          "isVoiceClip": true,
+          "clientActivityId": "client-activity-id",
+          "delivery": {
+            "priority": "high"
+          }
         }
         """.utf8)
 
@@ -65,6 +69,10 @@ final class MessagesAPITests: XCTestCase {
         XCTAssertEqual(message.mentionedPeople, ["person-1", "person-2"])
         XCTAssertEqual(message.mentionedGroups, ["all"])
         XCTAssertEqual(message.isVoiceClip, true)
+        XCTAssertEqual(message.additionalFields["clientActivityId"], .string("client-activity-id"))
+        XCTAssertEqual(message.additionalFields["delivery"], .object(["priority": .string("high")]))
+        XCTAssertNil(message.additionalFields["id"])
+        XCTAssertNil(message.additionalFields["roomId"])
         XCTAssertEqual(iso8601(message.created), "2026-05-01T18:01:02Z")
         XCTAssertEqual(iso8601(message.updated), "2026-05-01T19:03:04Z")
 

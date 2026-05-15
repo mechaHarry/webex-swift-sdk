@@ -69,6 +69,10 @@ final class EnrichedSpaceViewModelTests: XCTestCase {
             created: date,
             isReadOnly: true,
             isAnnouncementOnly: false,
+            additionalFields: [
+                "avatar": .string("https://example.com/group-space.png"),
+                "theme": .object(["color": .string("blue")])
+            ],
             enriched: WebexSpaceEnrichment(
                 teamName: "Platform Team",
                 spaceAvatar: nil,
@@ -87,7 +91,9 @@ final class EnrichedSpaceViewModelTests: XCTestCase {
             FieldDisplay(name: "isReadOnly", value: "true"),
             FieldDisplay(name: "isAnnouncementOnly", value: "false"),
             FieldDisplay(name: "lastActivity", value: "1970-01-01T00:00:00Z"),
-            FieldDisplay(name: "created", value: "1970-01-01T00:00:00Z")
+            FieldDisplay(name: "created", value: "1970-01-01T00:00:00Z"),
+            FieldDisplay(name: "additionalFields.avatar", value: "\"https://example.com/group-space.png\""),
+            FieldDisplay(name: "additionalFields.theme", value: #"{"color":"blue"}"#)
         ])
         XCTAssertEqual(detail.enrichedFields, [
             FieldDisplay(name: "enriched.teamName", value: "Platform Team"),
