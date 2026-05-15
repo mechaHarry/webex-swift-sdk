@@ -14,9 +14,38 @@ This package provides the OAuth and authenticated REST foundation:
 - memory-only access-token cache by default
 - coordinated token refresh
 - authenticated REST transport
-- typed People, Spaces, Memberships, and Messages APIs
-- snapshot streams for Spaces, Memberships, and Messages
+- typed REST APIs for People, Spaces/Rooms, Memberships, Messages, Teams,
+  Team Memberships, and Webhooks
+- snapshot streams for Spaces/Rooms, Teams, Memberships, Messages, and threaded
+  Messages
+- SDK-derived Spaces snapshot enrichment for team names and direct-space avatars
+- webhook notification decoding, signature verification, and stream-trigger
+  projection
 - experimental receive-only realtime WebSocket events and stream triggers
+
+## Public Surface Map
+
+This README is the public inventory for client and agent discovery. If an app
+needs an SDK-friendly collection view, prefer these surfaces instead of manually
+looping raw REST calls in UI code.
+
+- `client.people`: `me`, `list`, and `get`.
+- `client.spaces` / `client.rooms`: `list`, `create`, `get`, `update`,
+  `delete`, plus `stream(params:pageLimit:)`.
+- `client.memberships`: `list`, `create`, `get`, `update`, `delete`, plus
+  `stream(params:pageLimit:)`.
+- `client.messages`: `list`, `create`, `get`, `edit`, `delete`,
+  `stream(params:pageLimit:)`, and `threadedStream(params:pageLimit:)`.
+- `client.teams`: `list`, `create`, `get`, `update`, `delete`, plus
+  `stream(params:pageLimit:)`. Use this for a team roster; do not infer the
+  full team list from paged spaces.
+- `client.teamMemberships`: `list`, `create`, `get`, `update`, and `delete`.
+- `client.webhooks`: `list`, `create`, `get`, `update`, and `delete`.
+  `WebexWebhookNotification` can decode inbound webhook payloads,
+  `WebexWebhookSignatureVerifier` validates signed requests, and
+  `streamTrigger()` projects webhook notifications into `WebexStreamTrigger`.
+- `client.realtime.connect(options:)`: exposes connection `states`, decoded
+  realtime `events`, and `triggers` that can drive stream refreshes.
 
 ## Example
 
@@ -40,7 +69,8 @@ The host macOS app owns UI, account selection, and window-to-account routing. Th
 Snapshot streams are a stateful SDK layer over the wire-faithful REST APIs. They
 keep the previous snapshot visible while a refresh or next-page load is running,
 then emit a reconciled snapshot when the SDK has new data. They are not
-documented as real-time streams until Webex push/event triggers are implemented.
+push streams by themselves; use realtime or webhook triggers to ask a stream to
+refresh.
 
 ```swift
 let stream = client.spaces.stream(
@@ -68,6 +98,20 @@ The `max` parameter remains the Webex REST page size. The stream `pageLimit`
 is only a local safety cap for how many pages explicit `loadNextPage()` calls
 may accumulate before the stream reports `pagination.capReached`.
 
+Available snapshot adapters:
+
+- `client.spaces.stream(...)` returns `SpacesStream`.
+- `client.rooms.stream(...)` uses the same implementation through the Rooms
+  compatibility alias.
+- `client.teams.stream(...)` returns `TeamsStream`.
+- `client.memberships.stream(...)` returns `MembershipsStream`.
+- `client.messages.stream(...)` returns `MessagesStream`.
+- `client.messages.threadedStream(...)` returns `MessagesThreadStream`.
+
+All snapshot streams expose `snapshots`, `currentSnapshot()`, `refresh()`,
+`loadNextPage()`, and `refreshOnTriggers(...)`. `SpacesStream` also exposes
+`refreshEnrichment()`.
+
 Space streams enrich each `WebexSpace` item with SDK-derived details such as
 `item.enriched.teamName` and `item.enriched.spaceAvatar`. Direct REST calls
 remain wire-faithful: `client.spaces.list` and `client.spaces.get` do not make
@@ -81,6 +125,10 @@ Existing client code that consumes `stream.snapshots`, `currentSnapshot()`,
 `refresh()`, `loadNextPage()`, or `refreshOnTriggers` can keep those calls. Code
 that constructed `WebexSnapshotStream<WebexSpace>` directly or accepted that
 concrete generic type should accept `SpacesStream`/`RoomsStream` instead.
+
+For team rosters, use `client.teams.stream(...)` or `client.teams.list(...)`.
+`client.spaces.stream(...)` is not a complete team source because it only sees
+team IDs attached to the currently returned spaces.
 
 ## Realtime
 
@@ -102,6 +150,12 @@ Task {
     for await event in connection.events {
         print(event.resource, event.event, event.decodeStatus)
     }
+}
+
+let stream = client.messages.stream(params: .init(roomID: roomID, max: 25))
+let triggerTask = stream.refreshOnTriggers(connection.triggers) { trigger in
+    trigger.resource == WebexRealtimeResource.messages.rawValue
+        && trigger.roomID == roomID
 }
 ```
 
@@ -137,6 +191,9 @@ diagnostics include Mercury source metadata such as `sourceEventType`,
 The WebSocket transport prepares the WDM URL with text wire-format query
 parameters before connecting; using the raw WDM URL can make Webex send binary
 frames that the JSON event layer cannot decode.
+
+Cancel the task returned by `refreshOnTriggers(...)` when the owning view model
+or runtime is torn down.
 
 ## Spaces
 
@@ -224,6 +281,41 @@ try await client.teams.delete(teamID: renamed.id)
 fields in `additionalFields`. This is useful for inspecting wire-faithful
 metadata such as future visual or lifecycle fields, but the SDK only exposes
 documented team writes as typed request properties.
+
+## Webhooks
+
+Webhooks are available through `client.webhooks`.
+
+```swift
+let createdWebhook = try await client.webhooks.create(.init(
+    name: "Message Events",
+    targetURL: "https://example.com/webex",
+    resource: .messages,
+    event: .created,
+    filter: "roomId=\(spaceID)",
+    secret: webhookSecret
+))
+
+let webhookPage = try await client.webhooks.list(params: .init(max: 25))
+let webhook = try await client.webhooks.get(webhookID: createdWebhook.id)
+try await client.webhooks.delete(webhookID: webhook.id)
+```
+
+For inbound webhook handlers, validate the request before decoding or trusting
+the payload:
+
+```swift
+guard WebexWebhookSignatureVerifier.isValidRequest(
+    payload: requestBody,
+    headers: requestHeaders,
+    secret: webhookSecret
+) else {
+    throw WebhookError.invalidSignature
+}
+
+let notification = try JSONDecoder().decode(WebexWebhookNotification.self, from: requestBody)
+let trigger = notification.streamTrigger()
+```
 
 ## Memberships
 
