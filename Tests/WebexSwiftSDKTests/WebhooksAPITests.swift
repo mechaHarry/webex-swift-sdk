@@ -14,7 +14,10 @@ final class WebhooksAPITests: XCTestCase {
           "secret": "secret-value",
           "status": "futureStatus",
           "created": "2026-05-01T18:01:02.123Z",
-          "ownedBy": "futureOwner"
+          "ownedBy": "futureOwner",
+          "retryPolicy": {
+            "maxAttempts": 3
+          }
         }
         """.utf8)
 
@@ -30,6 +33,9 @@ final class WebhooksAPITests: XCTestCase {
         XCTAssertEqual(webhook.status, .unknown("futureStatus"))
         XCTAssertEqual(iso8601(webhook.created), "2026-05-01T18:01:02Z")
         XCTAssertEqual(webhook.ownedBy, .unknown("futureOwner"))
+        XCTAssertEqual(webhook.additionalFields["retryPolicy"], .object(["maxAttempts": .number(3)]))
+        XCTAssertNil(webhook.additionalFields["id"])
+        XCTAssertNil(webhook.additionalFields["targetUrl"])
     }
 
     func testWebhookNotificationDecodesMetadataAndBuildsStreamTrigger() throws {
@@ -46,6 +52,7 @@ final class WebhooksAPITests: XCTestCase {
           "ownedBy": "creator",
           "status": "active",
           "actorId": "actor-id",
+          "trackingId": "tracking-id",
           "data": {
             "id": "message-id",
             "roomId": "room-id",
@@ -68,6 +75,9 @@ final class WebhooksAPITests: XCTestCase {
         XCTAssertEqual(notification.actorID, "actor-id")
         XCTAssertEqual(notification.data?["id"], .string("message-id"))
         XCTAssertEqual(notification.data?["roomId"], .string("room-id"))
+        XCTAssertEqual(notification.additionalFields["trackingId"], .string("tracking-id"))
+        XCTAssertNil(notification.additionalFields["id"])
+        XCTAssertNil(notification.additionalFields["data"])
 
         let trigger = notification.streamTrigger()
         XCTAssertEqual(trigger.resource, "messages")

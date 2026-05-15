@@ -289,6 +289,7 @@ public struct WebexWebhook: Equatable, Decodable, Sendable {
     public let status: WebexWebhookStatus?
     public let created: Date?
     public let ownedBy: WebexWebhookOwnedBy?
+    public let additionalFields: [String: WebexJSONValue]
 
     public init(
         id: String,
@@ -300,7 +301,8 @@ public struct WebexWebhook: Equatable, Decodable, Sendable {
         secret: String? = nil,
         status: WebexWebhookStatus? = nil,
         created: Date? = nil,
-        ownedBy: WebexWebhookOwnedBy? = nil
+        ownedBy: WebexWebhookOwnedBy? = nil,
+        additionalFields: [String: WebexJSONValue] = [:]
     ) {
         self.id = id
         self.name = name
@@ -312,9 +314,10 @@ public struct WebexWebhook: Equatable, Decodable, Sendable {
         self.status = status
         self.created = created
         self.ownedBy = ownedBy
+        self.additionalFields = additionalFields
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case id
         case name
         case targetURL = "targetUrl"
@@ -339,6 +342,10 @@ public struct WebexWebhook: Equatable, Decodable, Sendable {
         self.status = try container.decodeIfPresent(WebexWebhookStatus.self, forKey: .status)
         self.created = try WebexDateDecoding.decodeIfPresent(from: container, forKey: .created)
         self.ownedBy = try container.decodeIfPresent(WebexWebhookOwnedBy.self, forKey: .ownedBy)
+        self.additionalFields = try WebexAdditionalFields.decode(
+            from: decoder,
+            excluding: Set(CodingKeys.allCases.map(\.rawValue))
+        )
     }
 }
 
@@ -355,6 +362,7 @@ public struct WebexWebhookNotification: Equatable, Decodable, Sendable {
     public let status: WebexWebhookStatus?
     public let actorID: String?
     public let data: [String: WebexJSONValue]?
+    public let additionalFields: [String: WebexJSONValue]
 
     public init(
         id: String,
@@ -368,7 +376,8 @@ public struct WebexWebhookNotification: Equatable, Decodable, Sendable {
         ownedBy: WebexWebhookOwnedBy? = nil,
         status: WebexWebhookStatus? = nil,
         actorID: String? = nil,
-        data: [String: WebexJSONValue]? = nil
+        data: [String: WebexJSONValue]? = nil,
+        additionalFields: [String: WebexJSONValue] = [:]
     ) {
         self.id = id
         self.name = name
@@ -382,9 +391,10 @@ public struct WebexWebhookNotification: Equatable, Decodable, Sendable {
         self.status = status
         self.actorID = actorID
         self.data = data
+        self.additionalFields = additionalFields
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case id
         case name
         case resource
@@ -397,6 +407,26 @@ public struct WebexWebhookNotification: Equatable, Decodable, Sendable {
         case status
         case actorID = "actorId"
         case data
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.name = try container.decodeIfPresent(String.self, forKey: .name)
+        self.resource = try container.decode(WebexWebhookResource.self, forKey: .resource)
+        self.event = try container.decode(WebexWebhookEvent.self, forKey: .event)
+        self.filter = try container.decodeIfPresent(String.self, forKey: .filter)
+        self.orgID = try container.decodeIfPresent(String.self, forKey: .orgID)
+        self.createdBy = try container.decodeIfPresent(String.self, forKey: .createdBy)
+        self.appID = try container.decodeIfPresent(String.self, forKey: .appID)
+        self.ownedBy = try container.decodeIfPresent(WebexWebhookOwnedBy.self, forKey: .ownedBy)
+        self.status = try container.decodeIfPresent(WebexWebhookStatus.self, forKey: .status)
+        self.actorID = try container.decodeIfPresent(String.self, forKey: .actorID)
+        self.data = try container.decodeIfPresent([String: WebexJSONValue].self, forKey: .data)
+        self.additionalFields = try WebexAdditionalFields.decode(
+            from: decoder,
+            excluding: Set(CodingKeys.allCases.map(\.rawValue))
+        )
     }
 
     public func streamTrigger() -> WebexStreamTrigger {

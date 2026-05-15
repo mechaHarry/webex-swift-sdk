@@ -40,6 +40,12 @@ final class SpacesAPITests: XCTestCase {
           "isAnnouncementOnly": true,
           "classificationId": "classification-id",
           "madePublic": "2026-04-30T19:00:00.000Z",
+          "avatar": "https://example.com/space.png",
+          "theme": {
+            "color": "blue",
+            "accent": true
+          },
+          "badges": ["war-room", "vip"],
           "errors": {
             "title": {
               "code": "kms_failure",
@@ -64,6 +70,14 @@ final class SpacesAPITests: XCTestCase {
         XCTAssertEqual(space.isAnnouncementOnly, true)
         XCTAssertEqual(space.classificationID, "classification-id")
         XCTAssertEqual(space.errors?["title"], WebexPartialResourceError(code: "kms_failure", reason: "Could not decrypt title"))
+        XCTAssertEqual(space.additionalFields["avatar"], .string("https://example.com/space.png"))
+        XCTAssertEqual(space.additionalFields["theme"], .object([
+            "color": .string("blue"),
+            "accent": .bool(true)
+        ]))
+        XCTAssertEqual(space.additionalFields["badges"], .array([.string("war-room"), .string("vip")]))
+        XCTAssertNil(space.additionalFields["id"])
+        XCTAssertNil(space.additionalFields["teamId"])
         XCTAssertEqual(iso8601(space.lastActivity), "2026-04-30T18:01:02Z")
         XCTAssertEqual(iso8601(space.created), "2026-04-29T17:00:00Z")
         XCTAssertEqual(iso8601(space.madePublic), "2026-04-30T19:00:00Z")
@@ -98,6 +112,7 @@ final class SpacesAPITests: XCTestCase {
             classificationID: "classification-id",
             madePublic: madePublic,
             errors: errors,
+            additionalFields: ["avatar": .string("https://example.com/space.png")],
             enriched: originalEnrichment
         )
         let newEnrichment = WebexSpaceEnrichment(
@@ -124,6 +139,7 @@ final class SpacesAPITests: XCTestCase {
         XCTAssertEqual(replaced.classificationID, space.classificationID)
         XCTAssertEqual(replaced.madePublic, space.madePublic)
         XCTAssertEqual(replaced.errors, space.errors)
+        XCTAssertEqual(replaced.additionalFields, space.additionalFields)
         XCTAssertEqual(replaced.enriched, newEnrichment)
         XCTAssertNotEqual(replaced.enriched, space.enriched)
     }
